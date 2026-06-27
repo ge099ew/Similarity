@@ -126,6 +126,9 @@ func (c *Codegen) genStmt(node ast.Node, indent string) {
 		c.genVariable(n, indent)
 	case *ast.IfNode:
 		c.genIf(n, indent)
+	case *ast.ReturnNode:
+		val := c.evalToTemp(n.Value, "w", indent)
+		c.emit("%sret %s", indent, val)
 	case *ast.LoopNode:
 		c.genLoop(n, indent)
 	case *ast.CallNode:
@@ -213,15 +216,15 @@ func (c *Codegen) genExprNode(expr *ast.ExprNode, qt string, indent string) stri
 
 // If[check{le(hp,0)}, True[...], False[...]]
 func (c *Codegen) genIf(n *ast.IfNode, indent string) {
-	trueLabel  := "@" + c.fresh("true")
+	trueLabel := "@" + c.fresh("true")
 	falseLabel := "@" + c.fresh("false")
-	endLabel   := "@" + c.fresh("end")
+	endLabel := "@" + c.fresh("end")
 
 	if cond, ok := n.Condition.(*ast.ConditionNode); ok {
 		condVar := "%" + c.fresh("cond")
-		qbeOp   := c.qbeCompare(cond.Op)
-		left    := c.emitLoad(cond.Left, indent)
-		right   := c.emitLoad(cond.Right, indent)
+		qbeOp := c.qbeCompare(cond.Op)
+		left := c.emitLoad(cond.Left, indent)
+		right := c.emitLoad(cond.Right, indent)
 		c.emit("%s%s =w %s %s, %s", indent, condVar, qbeOp, left, right)
 		c.emit("%sjnz %s, %s, %s", indent, condVar, trueLabel, falseLabel)
 	}
@@ -245,7 +248,7 @@ func (c *Codegen) genIf(n *ast.IfNode, indent string) {
 func (c *Codegen) genLoop(n *ast.LoopNode, indent string) {
 	loopLabel := "@" + c.fresh("loop")
 	bodyLabel := "@" + c.fresh("body")
-	endLabel  := "@" + c.fresh("lend")
+	endLabel := "@" + c.fresh("lend")
 
 	if n.Kind == "for" {
 		if init, ok := n.Init.(*ast.VariableNode); ok {
@@ -255,9 +258,9 @@ func (c *Codegen) genLoop(n *ast.LoopNode, indent string) {
 
 			if cond, ok := n.Condition.(*ast.ConditionNode); ok {
 				condVar := "%" + c.fresh("cond")
-				qbeOp   := c.qbeCompare(cond.Op)
-				left    := c.emitLoad(cond.Left, indent)
-				right   := c.emitLoad(cond.Right, indent)
+				qbeOp := c.qbeCompare(cond.Op)
+				left := c.emitLoad(cond.Left, indent)
+				right := c.emitLoad(cond.Right, indent)
 				c.emit("%s%s =w %s %s, %s", indent, condVar, qbeOp, left, right)
 				c.emit("%sjnz %s, %s, %s", indent, condVar, bodyLabel, endLabel)
 			}
@@ -314,7 +317,7 @@ func (c *Codegen) genCall(n *ast.CallNode, indent string) {
 
 // Error[try{...}, Ok[...], Err[...]]
 func (c *Codegen) genError(n *ast.ErrorNode, indent string) {
-	okLabel  := "@" + c.fresh("ok")
+	okLabel := "@" + c.fresh("ok")
 	errLabel := "@" + c.fresh("err")
 	endLabel := "@" + c.fresh("erend")
 
@@ -344,29 +347,55 @@ func (c *Codegen) genError(n *ast.ErrorNode, indent string) {
 // QBE比較命令（符号付き整数）
 func (c *Codegen) qbeCompare(op string) string {
 	switch op {
-	case "eq": return "ceqw"
-	case "ne": return "cnew"
-	case "lt": return "csltw"
-	case "le": return "cslew"
-	case "gt": return "csgtw"
-	case "ge": return "csgew"
-	default:   return "ceqw"
+	case "eq":
+		return "ceqw"
+	case "ne":
+		return "cnew"
+	case "lt":
+		return "csltw"
+	case "le":
+		return "cslew"
+	case "gt":
+		return "csgtw"
+	case "ge":
+		return "csgew"
+	default:
+		return "ceqw"
 	}
 }
 
 // Similarity演算子 → QBE命令
 func (c *Codegen) qbeOp(op string, qt string) string {
 	switch op {
-	case "+": if qt == "s" { return "adds" }; return "add"
-	case "-": if qt == "s" { return "subs" }; return "sub"
-	case "*": if qt == "s" { return "muls" }; return "mul"
-	case "/": if qt == "s" { return "divs" }; return "div"
-	default:  return "add"
+	case "+":
+		if qt == "s" {
+			return "adds"
+		}
+		return "add"
+	case "-":
+		if qt == "s" {
+			return "subs"
+		}
+		return "sub"
+	case "*":
+		if qt == "s" {
+			return "muls"
+		}
+		return "mul"
+	case "/":
+		if qt == "s" {
+			return "divs"
+		}
+		return "div"
+	default:
+		return "add"
 	}
 }
 
 // Similarity型 → QBE型
 func (c *Codegen) qbeType(t string) string {
-	if qt, ok := typeMap[t]; ok { return qt }
+	if qt, ok := typeMap[t]; ok {
+		return qt
+	}
 	return "w"
 }

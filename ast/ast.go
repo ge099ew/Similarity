@@ -36,6 +36,13 @@ type IfNode struct {
 	False     []Node
 }
 
+// ReturnNode return
+type ReturnNode struct {
+	Value Node
+}
+
+func (r *ReturnNode) TokenLiteral() string { return "return" }
+
 // LoopNode ループ
 // Loop[for{int(i:0), lt(i,10), step{1}}, Body[...]]
 type LoopNode struct {
@@ -50,7 +57,7 @@ type LoopNode struct {
 // Func[名前{receive{...}, 処理, return{...}}]
 type FuncNode struct {
 	Name    string
-	Public  bool         // Func_pub かどうか
+	Public  bool // Func_pub かどうか
 	Params  []VariableNode
 	Body    []Node
 	Returns Node
@@ -95,17 +102,17 @@ type ImportNode struct {
 	Symbols []string // 空なら全部
 }
 
-func (p *Program) TokenLiteral() string          { return "" }
-func (e *ExplanationNode) TokenLiteral() string   { return "Explanation" }
-func (v *VariableNode) TokenLiteral() string      { return "Variable" }
-func (i *IfNode) TokenLiteral() string            { return "If" }
-func (l *LoopNode) TokenLiteral() string          { return "Loop" }
-func (f *FuncNode) TokenLiteral() string          { return "Func" }
-func (c *CallNode) TokenLiteral() string          { return "call" }
-func (e *ErrorNode) TokenLiteral() string         { return "Error" }
-func (f *FatalNode) TokenLiteral() string         { return "Fatal" }
-func (e *ExternNode) TokenLiteral() string        { return "Extern" }
-func (i *ImportNode) TokenLiteral() string        { return "Import" }
+func (p *Program) TokenLiteral() string         { return "" }
+func (e *ExplanationNode) TokenLiteral() string { return "Explanation" }
+func (v *VariableNode) TokenLiteral() string    { return "Variable" }
+func (i *IfNode) TokenLiteral() string          { return "If" }
+func (l *LoopNode) TokenLiteral() string        { return "Loop" }
+func (f *FuncNode) TokenLiteral() string        { return "Func" }
+func (c *CallNode) TokenLiteral() string        { return "call" }
+func (e *ErrorNode) TokenLiteral() string       { return "Error" }
+func (f *FatalNode) TokenLiteral() string       { return "Fatal" }
+func (e *ExternNode) TokenLiteral() string      { return "Extern" }
+func (i *ImportNode) TokenLiteral() string      { return "Import" }
 
 // LiteralNode リテラル値（int, float, bool, String）
 type LiteralNode struct {
@@ -122,14 +129,14 @@ type ConditionNode struct {
 }
 
 func (l *LiteralNode) TokenLiteral() string   { return l.Value }
-func (c *ConditionNode) TokenLiteral() string  { return c.Op }
+func (c *ConditionNode) TokenLiteral() string { return c.Op }
 
 // ExprNode 演算式（+{int(a,b)}, *{int(a,b)} など）
 type ExprNode struct {
-	Op    string  // + - * /
+	Op    string // + - * /
 	Left  Node
 	Right Node
-	Type  string  // int / float など
+	Type  string // int / float など
 }
 
 func (e *ExprNode) TokenLiteral() string { return e.Op }

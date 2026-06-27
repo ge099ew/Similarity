@@ -1,0 +1,17 @@
+Explanation[Application{Benchmark(type:fibonacci)}]
+
+Func[fibonacci{
+  receive{int(n)},
+  If[check{le(n,1)},
+    True[return{n}],
+    False[return{0}]
+  ],
+  return{0}
+}]
+
+Func_pub[main{
+  receive{},
+  Variable[let{int(result:0)}],
+  Variable[let{int(result:call{fibonacci(10)})}],
+  return{result}
+}]

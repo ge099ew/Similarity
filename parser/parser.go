@@ -17,15 +17,19 @@ func New(tokens []lexer.Token) *Parser {
 	return &Parser{tokens: tokens, pos: 0}
 }
 
-func (p *Parser) cur() lexer.Token  { return p.tokens[p.pos] }
+func (p *Parser) cur() lexer.Token { return p.tokens[p.pos] }
 func (p *Parser) peek() lexer.Token {
-	if p.pos+1 < len(p.tokens) { return p.tokens[p.pos+1] }
+	if p.pos+1 < len(p.tokens) {
+		return p.tokens[p.pos+1]
+	}
 	return lexer.Token{Type: lexer.TOKEN_EOF}
 }
 
 func (p *Parser) advance() lexer.Token {
 	tok := p.tokens[p.pos]
-	if p.pos < len(p.tokens)-1 { p.pos++ }
+	if p.pos < len(p.tokens)-1 {
+		p.pos++
+	}
 	return tok
 }
 
@@ -62,16 +66,28 @@ func (p *Parser) ParseProgram() *ast.Program {
 
 func (p *Parser) parseStatement() ast.Node {
 	switch p.cur().Type {
-	case lexer.TOKEN_VARIABLE:  return p.parseVariable()
-	case lexer.TOKEN_IF:        return p.parseIf()
-	case lexer.TOKEN_LOOP:      return p.parseLoop()
-	case lexer.TOKEN_FUNC:      return p.parseFunc(false)
-	case lexer.TOKEN_FUNC_PUB:  return p.parseFunc(true)
-	case lexer.TOKEN_ERROR:     return p.parseError()
-	case lexer.TOKEN_FATAL:     return p.parseFatal()
-	case lexer.TOKEN_IMPORT:    return p.parseImport()
-	case lexer.TOKEN_EXTERN:    return p.parseExtern()
-	case lexer.TOKEN_CALL:      return p.parseCall()
+	case lexer.TOKEN_VARIABLE:
+		return p.parseVariable()
+	case lexer.TOKEN_IF:
+		return p.parseIf()
+	case lexer.TOKEN_RETURN:
+		return p.parseReturn()
+	case lexer.TOKEN_LOOP:
+		return p.parseLoop()
+	case lexer.TOKEN_FUNC:
+		return p.parseFunc(false)
+	case lexer.TOKEN_FUNC_PUB:
+		return p.parseFunc(true)
+	case lexer.TOKEN_ERROR:
+		return p.parseError()
+	case lexer.TOKEN_FATAL:
+		return p.parseFatal()
+	case lexer.TOKEN_IMPORT:
+		return p.parseImport()
+	case lexer.TOKEN_EXTERN:
+		return p.parseExtern()
+	case lexer.TOKEN_CALL:
+		return p.parseCall()
 	default:
 		p.errorf("文として解釈できません")
 		p.advance()
@@ -93,11 +109,15 @@ func (p *Parser) parseExplanation() *ast.ExplanationNode {
 		if p.cur().Type == lexer.TOKEN_LPAREN {
 			p.advance()
 			for p.cur().Type != lexer.TOKEN_RPAREN && p.cur().Type != lexer.TOKEN_EOF {
-				key := p.cur().Literal; p.advance()
+				key := p.cur().Literal
+				p.advance()
 				p.expect(lexer.TOKEN_COLON)
-				val := p.cur().Literal; p.advance()
+				val := p.cur().Literal
+				p.advance()
 				node.Args[key] = val
-				if p.cur().Type == lexer.TOKEN_COMMA { p.advance() }
+				if p.cur().Type == lexer.TOKEN_COMMA {
+					p.advance()
+				}
 			}
 			p.expect(lexer.TOKEN_RPAREN)
 		} else {
@@ -121,9 +141,11 @@ func (p *Parser) parseVariable() *ast.VariableNode {
 	p.expect(lexer.TOKEN_LBRACE)
 
 	node := &ast.VariableNode{Mutable: mutable}
-	node.Type = p.cur().Literal; p.advance() // int / float / bool / String / Box_int ...
+	node.Type = p.cur().Literal
+	p.advance() // int / float / bool / String / Box_int ...
 	p.expect(lexer.TOKEN_LPAREN)
-	node.Name = p.cur().Literal; p.advance() // 変数名
+	node.Name = p.cur().Literal
+	p.advance() // 変数名
 	p.expect(lexer.TOKEN_COLON)
 	node.Value = p.parseLiteral()
 	p.expect(lexer.TOKEN_RPAREN)
@@ -152,7 +174,9 @@ func (p *Parser) parseIf() *ast.IfNode {
 	p.expect(lexer.TOKEN_RBRACKET)
 
 	// False[...] (任意)
-	if p.cur().Type == lexer.TOKEN_COMMA { p.advance() }
+	if p.cur().Type == lexer.TOKEN_COMMA {
+		p.advance()
+	}
 	if p.cur().Type == lexer.TOKEN_FALSE {
 		p.advance()
 		p.expect(lexer.TOKEN_LBRACKET)
@@ -184,7 +208,8 @@ func (p *Parser) parseLoop() *ast.LoopNode {
 		// step{1}
 		p.expect(lexer.TOKEN_STEP)
 		p.expect(lexer.TOKEN_LBRACE)
-		stepVal, _ := strconv.Atoi(p.cur().Literal); p.advance()
+		stepVal, _ := strconv.Atoi(p.cur().Literal)
+		p.advance()
 		node.Step = stepVal
 		p.expect(lexer.TOKEN_RBRACE)
 		p.expect(lexer.TOKEN_RBRACE)
@@ -211,7 +236,8 @@ func (p *Parser) parseFunc(pub bool) *ast.FuncNode {
 	p.expect(lexer.TOKEN_LBRACKET)
 
 	node := &ast.FuncNode{Public: pub}
-	node.Name = p.cur().Literal; p.advance()
+	node.Name = p.cur().Literal
+	p.advance()
 	p.expect(lexer.TOKEN_LBRACE)
 
 	// receive{...}
@@ -219,23 +245,31 @@ func (p *Parser) parseFunc(pub bool) *ast.FuncNode {
 		p.advance()
 		p.expect(lexer.TOKEN_LBRACE)
 		for p.cur().Type != lexer.TOKEN_RBRACE && p.cur().Type != lexer.TOKEN_EOF {
-			typeName := p.cur().Literal; p.advance()
+			typeName := p.cur().Literal
+			p.advance()
 			p.expect(lexer.TOKEN_LPAREN)
-			paramName := p.cur().Literal; p.advance()
+			paramName := p.cur().Literal
+			p.advance()
 			p.expect(lexer.TOKEN_RPAREN)
 			node.Params = append(node.Params, ast.VariableNode{Type: typeName, Name: paramName})
-			if p.cur().Type == lexer.TOKEN_COMMA { p.advance() }
+			if p.cur().Type == lexer.TOKEN_COMMA {
+				p.advance()
+			}
 		}
 		p.expect(lexer.TOKEN_RBRACE)
-		if p.cur().Type == lexer.TOKEN_COMMA { p.advance() }
+		if p.cur().Type == lexer.TOKEN_COMMA {
+			p.advance()
+		}
 	}
 
 	// 処理
-	for p.cur().Type != lexer.TOKEN_RETURN && p.cur().Type != lexer.TOKEN_RBRACE && p.cur().Type != lexer.TOKEN_EOF {
+	for p.cur().Type != lexer.TOKEN_RBRACE && p.cur().Type != lexer.TOKEN_EOF {
 		if stmt := p.parseStatement(); stmt != nil {
 			node.Body = append(node.Body, stmt)
 		}
-		if p.cur().Type == lexer.TOKEN_COMMA { p.advance() }
+		if p.cur().Type == lexer.TOKEN_COMMA {
+			p.advance()
+		}
 	}
 
 	// return{...}
@@ -290,15 +324,21 @@ func (p *Parser) parseError() *ast.ErrorNode {
 	} else {
 		// type{...}
 		if p.cur().Type == lexer.TOKEN_IDENT && p.cur().Literal == "type" {
-			p.advance(); p.expect(lexer.TOKEN_LBRACE)
-			node.ErrType = p.cur().Literal; p.advance()
+			p.advance()
+			p.expect(lexer.TOKEN_LBRACE)
+			node.ErrType = p.cur().Literal
+			p.advance()
 			p.expect(lexer.TOKEN_RBRACE)
-			if p.cur().Type == lexer.TOKEN_COMMA { p.advance() }
+			if p.cur().Type == lexer.TOKEN_COMMA {
+				p.advance()
+			}
 		}
 		// msg{...}
 		if p.cur().Type == lexer.TOKEN_IDENT && p.cur().Literal == "msg" {
-			p.advance(); p.expect(lexer.TOKEN_LBRACE)
-			node.Msg = p.cur().Literal; p.advance()
+			p.advance()
+			p.expect(lexer.TOKEN_LBRACE)
+			node.Msg = p.cur().Literal
+			p.advance()
 			p.expect(lexer.TOKEN_RBRACE)
 		}
 		node.Err = p.parseBlock()
@@ -314,14 +354,20 @@ func (p *Parser) parseFatal() *ast.FatalNode {
 	p.expect(lexer.TOKEN_LBRACKET)
 	node := &ast.FatalNode{}
 	if p.cur().Type == lexer.TOKEN_IDENT && p.cur().Literal == "type" {
-		p.advance(); p.expect(lexer.TOKEN_LBRACE)
-		node.ErrType = p.cur().Literal; p.advance()
+		p.advance()
+		p.expect(lexer.TOKEN_LBRACE)
+		node.ErrType = p.cur().Literal
+		p.advance()
 		p.expect(lexer.TOKEN_RBRACE)
-		if p.cur().Type == lexer.TOKEN_COMMA { p.advance() }
+		if p.cur().Type == lexer.TOKEN_COMMA {
+			p.advance()
+		}
 	}
 	if p.cur().Type == lexer.TOKEN_IDENT && p.cur().Literal == "msg" {
-		p.advance(); p.expect(lexer.TOKEN_LBRACE)
-		node.Msg = p.cur().Literal; p.advance()
+		p.advance()
+		p.expect(lexer.TOKEN_LBRACE)
+		node.Msg = p.cur().Literal
+		p.advance()
 		p.expect(lexer.TOKEN_RBRACE)
 	}
 	p.expect(lexer.TOKEN_RBRACKET)
@@ -338,7 +384,9 @@ func (p *Parser) parseImport() *ast.ImportNode {
 	for p.cur().Type != lexer.TOKEN_RBRACE && p.cur().Type != lexer.TOKEN_EOF {
 		node.Symbols = append(node.Symbols, p.cur().Literal)
 		p.advance()
-		if p.cur().Type == lexer.TOKEN_COMMA { p.advance() }
+		if p.cur().Type == lexer.TOKEN_COMMA {
+			p.advance()
+		}
 	}
 	p.expect(lexer.TOKEN_RBRACE)
 	p.expect(lexer.TOKEN_RBRACKET)
@@ -354,14 +402,19 @@ func (p *Parser) parseExtern() *ast.ExternNode {
 	node := &ast.ExternNode{}
 	// lib{...}
 	if p.cur().Type == lexer.TOKEN_LIB {
-		p.advance(); p.expect(lexer.TOKEN_LBRACE)
+		p.advance()
+		p.expect(lexer.TOKEN_LBRACE)
 		for p.cur().Type != lexer.TOKEN_RBRACE && p.cur().Type != lexer.TOKEN_EOF {
 			node.Libs = append(node.Libs, p.cur().Literal)
 			p.advance()
-			if p.cur().Type == lexer.TOKEN_COMMA { p.advance() }
+			if p.cur().Type == lexer.TOKEN_COMMA {
+				p.advance()
+			}
 		}
 		p.expect(lexer.TOKEN_RBRACE)
-		if p.cur().Type == lexer.TOKEN_COMMA { p.advance() }
+		if p.cur().Type == lexer.TOKEN_COMMA {
+			p.advance()
+		}
 	}
 	p.expect(lexer.TOKEN_RBRACE)
 	p.expect(lexer.TOKEN_RBRACKET)
@@ -377,9 +430,23 @@ func (p *Parser) parseCall() *ast.CallNode {
 	p.expect(lexer.TOKEN_LPAREN)
 	for p.cur().Type != lexer.TOKEN_RPAREN && p.cur().Type != lexer.TOKEN_EOF {
 		node.Args = append(node.Args, p.parseLiteral())
-		if p.cur().Type == lexer.TOKEN_COMMA { p.advance() }
+		if p.cur().Type == lexer.TOKEN_COMMA {
+			p.advance()
+		}
 	}
 	p.expect(lexer.TOKEN_RPAREN)
+	p.expect(lexer.TOKEN_RBRACE)
+	return node
+}
+
+// return{value}
+func (p *Parser) parseReturn() *ast.ReturnNode {
+	p.advance() // skip return
+	p.expect(lexer.TOKEN_LBRACE)
+	node := &ast.ReturnNode{}
+	if p.cur().Type != lexer.TOKEN_RBRACE {
+		node.Value = p.parseLiteral()
+	}
 	p.expect(lexer.TOKEN_RBRACE)
 	return node
 }
@@ -395,7 +462,9 @@ func (p *Parser) parseBlock() []ast.Node {
 			if stmt := p.parseStatement(); stmt != nil {
 				nodes = append(nodes, stmt)
 			}
-			if p.cur().Type == lexer.TOKEN_COMMA { p.advance() }
+			if p.cur().Type == lexer.TOKEN_COMMA {
+				p.advance()
+			}
 		}
 	}
 }
@@ -405,7 +474,8 @@ func (p *Parser) parseTypedValue() *ast.VariableNode {
 	node := &ast.VariableNode{Type: p.cur().Literal, Mutable: true}
 	p.advance()
 	p.expect(lexer.TOKEN_LPAREN)
-	node.Name = p.cur().Literal; p.advance()
+	node.Name = p.cur().Literal
+	p.advance()
 	p.expect(lexer.TOKEN_COLON)
 	node.Value = p.parseLiteral()
 	p.expect(lexer.TOKEN_RPAREN)
@@ -461,17 +531,21 @@ func (p *Parser) parseArg() ast.Node {
 	case lexer.TOKEN_PLUS, lexer.TOKEN_MINUS, lexer.TOKEN_STAR, lexer.TOKEN_SLASH:
 		return p.parseExpr()
 	}
-	tok := p.cur(); p.advance()
+	tok := p.cur()
+	p.advance()
 	return &ast.LiteralNode{Kind: string(tok.Type), Value: tok.Literal}
 }
 
 // le(hp,0) / lt(i,10) / eq(a:10)
 func (p *Parser) parseCondition() *ast.ConditionNode {
-	op := p.cur().Literal; p.advance()
+	op := p.cur().Literal
+	p.advance()
 	p.expect(lexer.TOKEN_LPAREN)
-	left := p.cur().Literal; p.advance()
+	left := p.cur().Literal
+	p.advance()
 	p.expect(lexer.TOKEN_COMMA)
-	right := p.cur().Literal; p.advance()
+	right := p.cur().Literal
+	p.advance()
 	p.expect(lexer.TOKEN_RPAREN)
 	return &ast.ConditionNode{Op: op, Left: left, Right: right}
 }
