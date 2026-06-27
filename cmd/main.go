@@ -11,21 +11,27 @@ import (
 	"strings"
 )
 
-func compile(input, baseName string) {
+func compile(input, baseName string, irOnly bool) {
 	// ① lexer → parser → AST
 	l := lexer.New(input)
 	tokens := l.Tokenize()
 	if len(l.Errors) > 0 {
 		fmt.Println("=== Lexer Errors ===")
-		for _, e := range l.Errors { fmt.Println(e) }
+		for _, e := range l.Errors {
+			fmt.Println(e)
+		}
 	}
 
 	p := parser.New(tokens)
 	prog := p.ParseProgram()
 	if len(p.Errors) > 0 {
 		fmt.Println("=== Parser Errors ===")
-		for _, e := range p.Errors { fmt.Println(e) }
-		if len(p.Errors) > 5 { return }
+		for _, e := range p.Errors {
+			fmt.Println(e)
+		}
+		if len(p.Errors) > 5 {
+			return
+		}
 	}
 
 	// ② QBE IR生成（関数を sim_main にリネーム）
@@ -37,6 +43,11 @@ func compile(input, baseName string) {
 	ssaFile := baseName + ".ssa"
 	os.WriteFile(ssaFile, []byte(ir), 0644)
 	fmt.Printf("QBE IR  → %s\n", ssaFile)
+
+	if irOnly {
+		fmt.Printf("QBE IR → %s\n", ssaFile)
+		return
+	}
 
 	// ③ タイマー付きCラッパー生成
 	wrapperCode := `#include <stdio.h>
@@ -116,11 +127,17 @@ func main() {
 		fmt.Println("  なければCにフォールバックします")
 		os.Exit(1)
 	}
+	irOnly := false
+	filename := os.Args[1]
+	if os.Args[1] == "--ir-only" {
+		irOnly = true
+		filename = os.Args[2]
+	}
 
-	b, err := os.ReadFile(os.Args[1])
+	b, err := os.ReadFile(filename)
 	if err != nil {
 		fmt.Println("Error:", err)
 		os.Exit(1)
 	}
-	compile(string(b), os.Args[1])
+	compile(string(b), filename, irOnly)
 }
