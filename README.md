@@ -57,3 +57,27 @@ time g++ -O2 -o /tmp/bench benchmark/bench_cpp.cpp
 今のSimilarityはCを経由せずQBE IRを直接出してるので、
 実行速度の比較はかなり公平に近いですが、最適化はQBEの最適化レベルに依存します。
 「Similarityの設計がビルドを速くする」の証明は**コンパイル速度**の比較が本筋です。
+
+```bash
+Similarity(
+time ./sim --ir-only benchmark/bench_sim.iia
+QBE IR  → benchmark/bench_sim.iia.ssa
+QBE IR → benchmark/bench_sim.iia.ssa
+
+real    0m0.005s
+user    0m0.001s
+sys     0m0.005s
+)
+
+C++(
+time g++ -fsyntax-only benchmark/bench_cpp.cpp
+
+real    0m0.341s
+user    0m0.181s
+sys     0m0.045s
+)
+
+フロントエンドのベンチマーク結果：
+Similarity, 0.005s
+C++, 0.341s
+```
