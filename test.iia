@@ -1,0 +1,25 @@
+// Similarity サンプルコード
+// このファイルで動作確認をする
+
+Explanation[Application{Game(type:RPG, name:TestGame)}]
+
+Import[mylib{}]
+
+Variable[let{int(hp:100)}]
+Variable[unclet{int(MAX_HP:100)}]
+
+Func[heal{
+  receive{int(amount)},
+  If[
+    check{le(hp, 0)},
+    True[Fatal[type{GameOver}, msg{"HPが0以下"}]],
+    False[Variable[let{int(hp:+{int(hp, amount)})}]]
+  ],
+  return{}
+}]
+
+Func_pub[main{
+  receive{},
+  call{heal(10)},
+  return{}
+}]

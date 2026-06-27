@@ -1,0 +1,7 @@
+{
+  "recommendations": [
+    "golang.go",
+    "eamodio.gitlens",
+    "usernamehw.errorlens"
+  ]
+}

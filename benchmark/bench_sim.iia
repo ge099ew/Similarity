@@ -1,0 +1,10 @@
+Explanation[Application{Benchmark(type:sumloop)}]
+
+Func_pub[main{
+  receive{},
+  Variable[let{int(sum:0)}],
+  Loop[for{int(i:0), lt(i,100000000), step{1}},
+    Body[Variable[let{int(sum:+{int(sum,i)})}]]
+  ],
+  return{sum}
+}]

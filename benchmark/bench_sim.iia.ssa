@@ -1,0 +1,29 @@
+# Similarity - Application
+# value: Benchmark
+# type: sumloop
+
+export function w $sim_main() {
+@start
+    %sum.ptr =l alloc4 4
+    storew 0, %sum.ptr
+    %i.ptr =l alloc4 4
+    storew 0, %i.ptr
+    jmp @loop1
+@loop1
+    %t5 =w loadw %i.ptr
+    %cond4 =w csltw %t5, 100000000
+    jnz %cond4, @body2, @lend3
+@body2
+        %t7 =w loadw %sum.ptr
+        %t8 =w loadw %i.ptr
+        %r6 =w add %t7, %t8
+        storew %r6, %sum.ptr
+        %t9 =w loadw %i.ptr
+        %step10 =w add %t9, 1
+        storew %step10, %i.ptr
+        jmp @loop1
+@lend3
+    %t11 =w loadw %sum.ptr
+    ret %t11
+}
+
