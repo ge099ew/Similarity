@@ -1,83 +1,69 @@
-# Similarity vs C++ 対照実験
+# Similarity言語 進捗状況
 
-## パイプライン
-
-```
-.iia → QBE IR (.ssa) → qbe → .s → gcc → バイナリ
-```
-
-QBEがインストールされていれば自動でQBEを使います。
-なければCにフォールバックします。
+## 概要
+C++の「魔の領域」を安全・高速に置き換えることを目標としたオリジナルプログラミング言語。
 
 ---
 
-## 実行手順
+## 実装済み ✅
 
-### ① Similarityをコンパイル
-
-```bash
-cd similarity  # プロジェクトルート
-go run ./cmd/ benchmark/bench_sim.iia
+### コンパイラパイプライン
+```
+.iia → lexer → parser → AST → QBE IR → アセンブリ → バイナリ
 ```
 
-生成されるファイル：
-```
-benchmark/bench_sim.iia.ssa         ← QBE IR
-benchmark/bench_sim.iia.s           ← アセンブリ（QBE使用時）
-benchmark/bench_sim.iia_wrapper.c   ← タイマーラッパー
-benchmark/bench_sim.iia.out         ← バイナリ
-```
-
-### ② C++をコンパイル
-
-```bash
-g++ -O2 -o benchmark/bench_cpp benchmark/bench_cpp.cpp
-```
-
-### ③ 実行して比較
-
-```bash
-./benchmark/bench_sim.iia.out
-./benchmark/bench_cpp
-```
+### 言語機能
+- 変数宣言 `Variable[let{int(x:10)}]`
+- 変数再代入 `Mutation[variable{int(x:30)}]`
+- If文 `If[check{le(hp,0)}, True[...], False[...]]`
+- ループ `Loop[for{...}, Body[...]]` / `Loop[Count{...}, Body[...]]`
+- 関数定義 `Func[名前{receive{...}, 処理, return{...}}]`
+- 再帰関数（fibonacci動作確認済み）
+- return文（If文の中でも使用可能）
+- エラーハンドリング `Error[try/Ok/Err]` / `Fatal[...]`
+- モジュール `Import[...]` / `Extern[...]`
+- 演算子 `+{int(a,b)}` `-{...}` `*{...}` `/{...}`
+- 比較演算子 `eq` `le` `lt` `ge` `gt` `ne`
+- `--ir-only` フラグ（フロントエンドのみ実行）
+- VSCodeシンタックスハイライト（`.iia`ファイル対応）
 
 ---
 
-## コンパイル速度も測る（こちらが今一番意味ある指標）
+## ベンチマーク結果
 
-```bash
-time go run ./cmd/ benchmark/bench_sim.iia
-time g++ -O2 -o /tmp/bench benchmark/bench_cpp.cpp
-```
+### 実行速度
+| 言語 | 結果 | 時間 |
+|------|------|------|
+| Similarity (QBE) | 887459712 | 48.42ms |
+| C++ (g++ -O2) | 887459712 | 46.578ms |
+
+→ **ほぼ同等。計算結果も一致。**
+
+### フロントエンド速度（最重要指標）
+| 言語 | 計測方法 | 時間 |
+|------|----------|------|
+| Similarity | `--ir-only` | 0.005s |
+| C++ | `-fsyntax-only` | 0.341s |
+
+→ **約68倍速い。**
 
 ---
 
-## 今の正直な限界
+## 未実装
 
-今のSimilarityはCを経由せずQBE IRを直接出してるので、
-実行速度の比較はかなり公平に近いですが、最適化はQBEの最適化レベルに依存します。
-「Similarityの設計がビルドを速くする」の証明は**コンパイル速度**の比較が本筋です。
+- 高級版シンタックスシュガー（自己ホスト）
+- モジュールシステムの完全実装
+- C++ライブラリとのinterop
+- 型の互換性（C++複合型との対応）
+- 非同期・GPU処理
 
-```bash
-Similarity(
-time ./sim --ir-only benchmark/bench_sim.iia
-QBE IR  → benchmark/bench_sim.iia.ssa
-QBE IR → benchmark/bench_sim.iia.ssa
+---
 
-real    0m0.005s
-user    0m0.001s
-sys     0m0.005s
-)
+## 今後の予定
 
-C++(
-time g++ -fsyntax-only benchmark/bench_cpp.cpp
-
-real    0m0.341s
-user    0m0.181s
-sys     0m0.045s
-)
-
-フロントエンドのベンチマーク結果：
-Similarity, 0.005s
-C++, 0.341s
+```
+① 高級版構文の実装（.iiaで高級版を書く）
+② 自己ホスト（SimilarityでSimilarityを書く）
+③ モジュールシステム完全実装
+④ C++interop
 ```
