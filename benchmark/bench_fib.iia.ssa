@@ -1,6 +1,6 @@
 # Similarity - Application
-# value: Benchmark
 # type: fibonacci
+# value: Benchmark
 
 function w $fibonacci(w %n) {
 @start
@@ -9,7 +9,18 @@ function w $fibonacci(w %n) {
 @true1
         ret %n
 @false2
-        ret 0
+        %a.ptr =l alloc4 4
+        %r5 =w sub %n, 1
+        %ret6 = w call $fibonacci(w %r5)
+        storew %ret6, %a.ptr
+        %b.ptr =l alloc4 4
+        %r7 =w sub %n, 2
+        %ret8 = w call $fibonacci(w %r7)
+        storew %ret8, %b.ptr
+        %t10 =w loadw %a.ptr
+        %t11 =w loadw %b.ptr
+        %r9 =w add %t10, %t11
+        ret %r9
 @end3
     ret 0
 }
@@ -17,10 +28,9 @@ function w $fibonacci(w %n) {
 export function w $sim_main() {
 @start
     %result.ptr =l alloc4 4
-    storew 0, %result.ptr
-    %ret5 = w call $fibonacci(w 10)
-    storew %ret5, %result.ptr
-    %t6 =w loadw %result.ptr
-    ret %t6
+    %ret12 = w call $fibonacci(w 10)
+    storew %ret12, %result.ptr
+    %t13 =w loadw %result.ptr
+    ret %t13
 }
 
