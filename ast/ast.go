@@ -53,6 +53,15 @@ type LoopNode struct {
 	Body      []Node
 }
 
+// MutationNode
+type MutationNode struct {
+	Type  string
+	Name  string
+	Value Node
+}
+
+func (m *MutationNode) TokenLiteral() string { return "Mutation" }
+
 // FuncNode 関数定義
 // Func[名前{receive{...}, 処理, return{...}}]
 type FuncNode struct {

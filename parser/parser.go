@@ -68,6 +68,8 @@ func (p *Parser) parseStatement() ast.Node {
 	switch p.cur().Type {
 	case lexer.TOKEN_VARIABLE:
 		return p.parseVariable()
+	case lexer.TOKEN_MUTATION:
+		return p.parseMutation()
 	case lexer.TOKEN_IF:
 		return p.parseIf()
 	case lexer.TOKEN_RETURN:
@@ -126,6 +128,32 @@ func (p *Parser) parseExplanation() *ast.ExplanationNode {
 			p.advance()
 		}
 	}
+	p.expect(lexer.TOKEN_RBRACE)
+	p.expect(lexer.TOKEN_RBRACKET)
+	return node
+}
+
+// Mutation[variable{int(x:30)}]
+func (p *Parser) parseMutation() *ast.MutationNode {
+	p.advance() // skip Mutation  ← 先にこれ
+	p.expect(lexer.TOKEN_LBRACKET)
+
+	// variable をスキップ
+	if p.cur().Type == lexer.TOKEN_IDENT ||
+		p.cur().Type == lexer.TOKEN_VARIABLE_KEY {
+		p.advance()
+	}
+	p.expect(lexer.TOKEN_LBRACE)
+
+	node := &ast.MutationNode{}
+	node.Type = p.cur().Literal
+	p.advance() // int
+	p.expect(lexer.TOKEN_LPAREN)
+	node.Name = p.cur().Literal
+	p.advance() // x
+	p.expect(lexer.TOKEN_COLON)
+	node.Value = p.parseLiteral()
+	p.expect(lexer.TOKEN_RPAREN)
 	p.expect(lexer.TOKEN_RBRACE)
 	p.expect(lexer.TOKEN_RBRACKET)
 	return node

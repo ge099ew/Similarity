@@ -5,30 +5,32 @@ import "fmt"
 type TokenType string
 
 const (
-	TOKEN_VARIABLE    TokenType = "VARIABLE"
-	TOKEN_FUNC        TokenType = "FUNC"
-	TOKEN_IF          TokenType = "IF"
-	TOKEN_LOOP        TokenType = "LOOP"
-	TOKEN_ERROR       TokenType = "ERROR"
-	TOKEN_FATAL       TokenType = "FATAL"
-	TOKEN_IMPORT      TokenType = "IMPORT"
-	TOKEN_EXTERN      TokenType = "EXTERN"
-	TOKEN_EXPLANATION TokenType = "EXPLANATION"
-	TOKEN_ASYNC       TokenType = "ASYNC"
-	TOKEN_AWAIT       TokenType = "AWAIT"
-	TOKEN_GPU         TokenType = "GPU"
-	TOKEN_MEM         TokenType = "MEM"
-	TOKEN_FUNC_PUB    TokenType = "FUNC_PUB"
+	TOKEN_VARIABLE     TokenType = "VARIABLE"
+	TOKEN_VARIABLE_KEY TokenType = "VARIABLE_KEY"
+	TOKEN_FUNC         TokenType = "FUNC"
+	TOKEN_IF           TokenType = "IF"
+	TOKEN_LOOP         TokenType = "LOOP"
+	TOKEN_ERROR        TokenType = "ERROR"
+	TOKEN_FATAL        TokenType = "FATAL"
+	TOKEN_IMPORT       TokenType = "IMPORT"
+	TOKEN_EXTERN       TokenType = "EXTERN"
+	TOKEN_EXPLANATION  TokenType = "EXPLANATION"
+	TOKEN_ASYNC        TokenType = "ASYNC"
+	TOKEN_AWAIT        TokenType = "AWAIT"
+	TOKEN_GPU          TokenType = "GPU"
+	TOKEN_MEM          TokenType = "MEM"
+	TOKEN_FUNC_PUB     TokenType = "FUNC_PUB"
+	TOKEN_MUTATION     TokenType = "MUTATION"
 
-	TOKEN_LET    TokenType = "LET"
-	TOKEN_UNCLET TokenType = "UNCLET"
-	TOKEN_FOR    TokenType = "FOR"
-	TOKEN_COUNT  TokenType = "COUNT"
-	TOKEN_CHECK  TokenType = "CHECK"
-	TOKEN_TRUE   TokenType = "TRUE"
-	TOKEN_FALSE  TokenType = "FALSE"
-	TOKEN_BODY   TokenType = "BODY"
-	TOKEN_STEP   TokenType = "STEP"
+	TOKEN_LET     TokenType = "LET"
+	TOKEN_UNCLET  TokenType = "UNCLET"
+	TOKEN_FOR     TokenType = "FOR"
+	TOKEN_COUNT   TokenType = "COUNT"
+	TOKEN_CHECK   TokenType = "CHECK"
+	TOKEN_TRUE    TokenType = "TRUE"
+	TOKEN_FALSE   TokenType = "FALSE"
+	TOKEN_BODY    TokenType = "BODY"
+	TOKEN_STEP    TokenType = "STEP"
 	TOKEN_RECEIVE TokenType = "RECEIVE"
 	TOKEN_RETURN  TokenType = "RETURN"
 	TOKEN_CALL    TokenType = "CALL"
@@ -68,6 +70,7 @@ const (
 
 var keywords = map[string]TokenType{
 	"Variable":    TOKEN_VARIABLE,
+	"variable":    TOKEN_VARIABLE_KEY, // 小文字のvariable
 	"Func":        TOKEN_FUNC,
 	"If":          TOKEN_IF,
 	"Loop":        TOKEN_LOOP,
@@ -104,6 +107,7 @@ var keywords = map[string]TokenType{
 	"lib":         TOKEN_LIB,
 	"true":        TOKEN_BOOL_LIT,
 	"false":       TOKEN_BOOL_LIT,
+	"Mutation":    TOKEN_MUTATION,
 }
 
 type Token struct {
@@ -117,10 +121,10 @@ func (t Token) String() string {
 }
 
 type Lexer struct {
-	input   string
-	pos     int
-	line    int
-	Errors  []string
+	input  string
+	pos    int
+	line   int
+	Errors []string
 }
 
 func New(input string) *Lexer {
@@ -149,19 +153,45 @@ func (l *Lexer) nextToken() Token {
 	ch := l.input[l.pos]
 
 	switch ch {
-	case '[': l.pos++; return Token{TOKEN_LBRACKET, "[", l.line}
-	case ']': l.pos++; return Token{TOKEN_RBRACKET, "]", l.line}
-	case '{': l.pos++; return Token{TOKEN_LBRACE,   "{", l.line}
-	case '}': l.pos++; return Token{TOKEN_RBRACE,   "}", l.line}
-	case '(': l.pos++; return Token{TOKEN_LPAREN,   "(", l.line}
-	case ')': l.pos++; return Token{TOKEN_RPAREN,   ")", l.line}
-	case ',': l.pos++; return Token{TOKEN_COMMA,    ",", l.line}
-	case ':': l.pos++; return Token{TOKEN_COLON,    ":", l.line}
-	case ';': l.pos++; return Token{TOKEN_SEMI,     ";", l.line}
-	case '+': l.pos++; return Token{TOKEN_PLUS,     "+", l.line}
-	case '-': l.pos++; return Token{TOKEN_MINUS,    "-", l.line}
-	case '*': l.pos++; return Token{TOKEN_STAR,     "*", l.line}
-	case '/': l.pos++; return Token{TOKEN_SLASH,    "/", l.line}
+	case '[':
+		l.pos++
+		return Token{TOKEN_LBRACKET, "[", l.line}
+	case ']':
+		l.pos++
+		return Token{TOKEN_RBRACKET, "]", l.line}
+	case '{':
+		l.pos++
+		return Token{TOKEN_LBRACE, "{", l.line}
+	case '}':
+		l.pos++
+		return Token{TOKEN_RBRACE, "}", l.line}
+	case '(':
+		l.pos++
+		return Token{TOKEN_LPAREN, "(", l.line}
+	case ')':
+		l.pos++
+		return Token{TOKEN_RPAREN, ")", l.line}
+	case ',':
+		l.pos++
+		return Token{TOKEN_COMMA, ",", l.line}
+	case ':':
+		l.pos++
+		return Token{TOKEN_COLON, ":", l.line}
+	case ';':
+		l.pos++
+		return Token{TOKEN_SEMI, ";", l.line}
+	case '+':
+		l.pos++
+		return Token{TOKEN_PLUS, "+", l.line}
+	case '-':
+		l.pos++
+		return Token{TOKEN_MINUS, "-", l.line}
+	case '*':
+		l.pos++
+		return Token{TOKEN_STAR, "*", l.line}
+	case '/':
+		l.pos++
+		return Token{TOKEN_SLASH, "/", l.line}
 	case '"':
 		return l.readString()
 	}
@@ -252,7 +282,7 @@ func (l *Lexer) skipWhitespaceAndComments() {
 	}
 }
 
-func isDigit(ch byte) bool  { return ch >= '0' && ch <= '9' }
+func isDigit(ch byte) bool { return ch >= '0' && ch <= '9' }
 func isLetter(ch byte) bool {
 	return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_' || ch > 127
 }

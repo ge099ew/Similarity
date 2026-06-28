@@ -139,6 +139,15 @@ func (c *Codegen) genStmt(node ast.Node, indent string) {
 	case *ast.ReturnNode:
 		val := c.evalToTemp(n.Value, "w", indent)
 		c.emit("%sret %s", indent, val)
+	case *ast.MutationNode:
+		ptr, ok := c.vars[n.Name]
+		if !ok {
+			// 変数が存在しない場合はエラー
+			c.emit("%s# Error: %s は未宣言", indent, n.Name)
+			return
+		}
+		val := c.evalToTemp(n.Value, c.qbeType(n.Type), indent)
+		c.emit("%sstorew %s, %s", indent, val, ptr)
 	case *ast.LoopNode:
 		c.genLoop(n, indent)
 	case *ast.CallNode:
