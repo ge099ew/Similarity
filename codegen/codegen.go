@@ -25,11 +25,15 @@ type Codegen struct {
 	counter int
 	// 変数名 → スタックポインタ変数名（メモリベース）
 	// 例: "sum" → "%sum.ptr"
-	vars map[string]string
+	vars   map[string]string
+	params map[string]string //パラメータ名→SSA変数
 }
 
 func New() *Codegen {
-	return &Codegen{vars: make(map[string]string)}
+	return &Codegen{
+		vars:   make(map[string]string),
+		params: make(map[string]string),
+	}
 }
 
 func (c *Codegen) fresh(prefix string) string {
@@ -87,7 +91,7 @@ func (c *Codegen) genFunc(fn *ast.FuncNode) {
 		qt := c.qbeType(p.Type)
 		pv := "%" + p.Name
 		// パラメータはSSA変数として直接使う（変更不可前提）
-		c.vars[p.Name] = pv
+		c.params[p.Name] = pv
 		params = append(params, fmt.Sprintf("%s %s", qt, pv))
 	}
 
@@ -104,15 +108,21 @@ func (c *Codegen) genFunc(fn *ast.FuncNode) {
 	}
 
 	// return
-	if fn.Returns != nil {
-		if lit, ok := fn.Returns.(*ast.LiteralNode); ok {
-			retVal := c.emitLoad(lit.Value, "    ")
-			c.emit("    ret %s", retVal)
-		} else {
-			c.emit("    ret 0")
+	hasTopReturn := false
+	for _, stmt := range fn.Body {
+		if _, ok := stmt.(*ast.ReturnNode); ok {
+			hasTopReturn = true
 		}
-	} else {
-		c.emit("    ret 0")
+	}
+	if !hasTopReturn {
+		if fn.Returns != nil {
+			if lit, ok := fn.Returns.(*ast.LiteralNode); ok {
+				retVal := c.emitLoad(lit.Value, "    ")
+				c.emit("    ret %s", retVal)
+			} else {
+				c.emit("    ret 0")
+			}
+		}
 	}
 
 	c.emit("}")
@@ -169,6 +179,10 @@ func (c *Codegen) genVariable(v *ast.VariableNode, indent string) {
 
 // 変数をロードしてテンポラリに入れる
 func (c *Codegen) emitLoad(name, indent string) string {
+	if pv, ok := c.params[name]; ok {
+		return pv
+	}
+
 	if ptr, ok := c.vars[name]; ok {
 		tmp := "%" + c.fresh("t")
 		c.emit("%s%s =w loadw %s", indent, tmp, ptr)
@@ -185,6 +199,9 @@ func (c *Codegen) evalToTemp(node ast.Node, qt string, indent string) string {
 	}
 	switch n := node.(type) {
 	case *ast.LiteralNode:
+		if pv, ok := c.params[n.Value]; ok {
+			return pv
+		}
 		// 変数ならloadw、数値リテラルならcopy
 		if ptr, ok := c.vars[n.Value]; ok {
 			tmp := "%" + c.fresh("t")
@@ -194,6 +211,8 @@ func (c *Codegen) evalToTemp(node ast.Node, qt string, indent string) string {
 		return n.Value
 	case *ast.ExprNode:
 		return c.genExprNode(n, qt, indent)
+	case *ast.CallNode:
+		return c.genCallExpr(n, qt, indent)
 	}
 	return "0"
 }
@@ -230,17 +249,28 @@ func (c *Codegen) genIf(n *ast.IfNode, indent string) {
 	}
 
 	c.emit("%s", trueLabel)
+	hasReturn := false
 	for _, stmt := range n.True {
 		c.genStmt(stmt, indent+"    ")
+		if _, ok := stmt.(*ast.ReturnNode); ok {
+			hasReturn = true
+		}
 	}
-	c.emit("%sjmp %s", indent+"    ", endLabel)
+	if !hasReturn {
+		c.emit("%sjmp %s", indent+"    ")
+	}
 
 	c.emit("%s", falseLabel)
+	falseHasReturn := false
 	for _, stmt := range n.False {
 		c.genStmt(stmt, indent+"    ")
+		if _, ok := stmt.(*ast.ReturnNode); ok {
+			falseHasReturn = true
+		}
 	}
-	c.emit("%sjmp %s", indent+"    ", endLabel)
-
+	if !falseHasReturn {
+		c.emit("%sjmp %s", indent+"    ", endLabel)
+	}
 	c.emit("%s", endLabel)
 }
 
@@ -313,6 +343,17 @@ func (c *Codegen) genCall(n *ast.CallNode, indent string) {
 	}
 	result := "%" + c.fresh("ret")
 	c.emit("%s%s =w call $%s(%s)", indent, result, n.FuncName, strings.Join(args, ", "))
+}
+
+func (c *Codegen) genCallExpr(n *ast.CallNode, qt string, indent string) string {
+	var args []string
+	for _, arg := range n.Args {
+		val := c.evalToTemp(arg, "w", indent)
+		args = append(args, "w "+val)
+	}
+	result := "%" + c.fresh("ret")
+	c.emit("%s%s = w call $%s(%s)", indent, result, n.FuncName, strings.Join(args, ","))
+	return result
 }
 
 // Error[try{...}, Ok[...], Err[...]]

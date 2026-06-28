@@ -1,0 +1,26 @@
+# Similarity - Application
+# value: Benchmark
+# type: fibonacci
+
+function w $fibonacci(w %n) {
+@start
+    %cond4 =w cslew %n, 1
+    jnz %cond4, @true1, @false2
+@true1
+        ret %n
+@false2
+        ret 0
+@end3
+    ret 0
+}
+
+export function w $sim_main() {
+@start
+    %result.ptr =l alloc4 4
+    storew 0, %result.ptr
+    %ret5 = w call $fibonacci(w 10)
+    storew %ret5, %result.ptr
+    %t6 =w loadw %result.ptr
+    ret %t6
+}
+

@@ -488,6 +488,8 @@ func (p *Parser) parseLiteral() ast.Node {
 	switch p.cur().Type {
 	case lexer.TOKEN_PLUS, lexer.TOKEN_MINUS, lexer.TOKEN_STAR, lexer.TOKEN_SLASH:
 		return p.parseExpr()
+	case lexer.TOKEN_CALL:
+		return p.parseCall()
 	}
 	tok := p.cur()
 	p.advance()
