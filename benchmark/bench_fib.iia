@@ -1,8 +1,8 @@
 Explanation[Application{Benchmark(type:fibonacci)}]
 
-Func[fibonacci{
+Function[fibonacci{
   receive{int(n)},
-  If[check{le(n,1)},
+  If[check{lesseq(n,1)},
     True[return{n}],
     False[
       Variable[let{int(a:call{fibonacci(-{int(n,1)})})}],
@@ -13,7 +13,7 @@ Func[fibonacci{
   return{0}
 }]
 
-Func_pub[main{
+Function_pub[main{
   receive{},
   Variable[let{int(result:call{fibonacci(10)})}],
   return{result}

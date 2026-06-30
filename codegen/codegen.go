@@ -23,10 +23,8 @@ var typeMap = map[string]string{
 type Codegen struct {
 	buf     strings.Builder
 	counter int
-	// 変数名 → スタックポインタ変数名（メモリベース）
-	// 例: "sum" → "%sum.ptr"
-	vars   map[string]string
-	params map[string]string //パラメータ名→SSA変数
+	vars    map[string]string
+	params  map[string]string
 }
 
 func New() *Codegen {
@@ -81,16 +79,13 @@ func (c *Codegen) genTopLevel(node ast.Node) {
 	}
 }
 
-// 関数生成
 func (c *Codegen) genFunc(fn *ast.FuncNode) {
-	// 関数ごとに変数マップをリセット
 	c.vars = make(map[string]string)
 
 	var params []string
 	for _, p := range fn.Params {
 		qt := c.qbeType(p.Type)
 		pv := "%" + p.Name
-		// パラメータはSSA変数として直接使う（変更不可前提）
 		c.params[p.Name] = pv
 		params = append(params, fmt.Sprintf("%s %s", qt, pv))
 	}
@@ -107,7 +102,6 @@ func (c *Codegen) genFunc(fn *ast.FuncNode) {
 		c.genStmt(stmt, "    ")
 	}
 
-	// return
 	hasTopReturn := false
 	for _, stmt := range fn.Body {
 		if _, ok := stmt.(*ast.ReturnNode); ok {
@@ -122,6 +116,8 @@ func (c *Codegen) genFunc(fn *ast.FuncNode) {
 			} else {
 				c.emit("    ret 0")
 			}
+		} else {
+			c.emit("    ret 0")
 		}
 	}
 
@@ -129,7 +125,6 @@ func (c *Codegen) genFunc(fn *ast.FuncNode) {
 	c.emit("")
 }
 
-// 文を生成
 func (c *Codegen) genStmt(node ast.Node, indent string) {
 	switch n := node.(type) {
 	case *ast.VariableNode:
@@ -142,7 +137,6 @@ func (c *Codegen) genStmt(node ast.Node, indent string) {
 	case *ast.MutationNode:
 		ptr, ok := c.vars[n.Name]
 		if !ok {
-			// 変数が存在しない場合はエラー
 			c.emit("%s# Error: %s は未宣言", indent, n.Name)
 			return
 		}
@@ -162,19 +156,15 @@ func (c *Codegen) genStmt(node ast.Node, indent string) {
 	}
 }
 
-// Variable[let{int(x:10)}]
-// メモリベース: alloc4でスタック確保、storew/loadwでアクセス
 func (c *Codegen) genVariable(v *ast.VariableNode, indent string) {
 	qt := c.qbeType(v.Type)
 	ptrVar := "%" + v.Name + ".ptr"
 
 	if _, exists := c.vars[v.Name]; !exists {
-		// 初回宣言: スタック領域を確保
 		c.vars[v.Name] = ptrVar
 		c.emit("%s%s =l alloc4 4", indent, ptrVar)
 	}
 
-	// 値を計算してストア
 	ptr := c.vars[v.Name]
 	if v.Value != nil {
 		val := c.evalToTemp(v.Value, qt, indent)
@@ -186,7 +176,6 @@ func (c *Codegen) genVariable(v *ast.VariableNode, indent string) {
 	_ = qt
 }
 
-// 変数をロードしてテンポラリに入れる
 func (c *Codegen) emitLoad(name, indent string) string {
 	if pv, ok := c.params[name]; ok {
 		return pv
@@ -197,11 +186,9 @@ func (c *Codegen) emitLoad(name, indent string) string {
 		c.emit("%s%s =w loadw %s", indent, tmp, ptr)
 		return tmp
 	}
-	// 数値リテラルはそのまま
 	return name
 }
 
-// 値を評価してQBE変数名を返す
 func (c *Codegen) evalToTemp(node ast.Node, qt string, indent string) string {
 	if node == nil {
 		return "0"
@@ -211,7 +198,6 @@ func (c *Codegen) evalToTemp(node ast.Node, qt string, indent string) string {
 		if pv, ok := c.params[n.Value]; ok {
 			return pv
 		}
-		// 変数ならloadw、数値リテラルならcopy
 		if ptr, ok := c.vars[n.Value]; ok {
 			tmp := "%" + c.fresh("t")
 			c.emit("%s%s =w loadw %s", indent, tmp, ptr)
@@ -226,7 +212,6 @@ func (c *Codegen) evalToTemp(node ast.Node, qt string, indent string) string {
 	return "0"
 }
 
-// 演算式のIR生成
 func (c *Codegen) genExprNode(expr *ast.ExprNode, qt string, indent string) string {
 	if expr.Type != "" {
 		qt = c.qbeType(expr.Type)
@@ -242,7 +227,7 @@ func (c *Codegen) genExprNode(expr *ast.ExprNode, qt string, indent string) stri
 	return result
 }
 
-// If[check{le(hp,0)}, True[...], False[...]]
+// If[check{lesseq(hp,0)}, True[...], False[...]]
 func (c *Codegen) genIf(n *ast.IfNode, indent string) {
 	trueLabel := "@" + c.fresh("true")
 	falseLabel := "@" + c.fresh("false")
@@ -266,7 +251,7 @@ func (c *Codegen) genIf(n *ast.IfNode, indent string) {
 		}
 	}
 	if !hasReturn {
-		c.emit("%sjmp %s", indent+"    ")
+		c.emit("%sjmp %s", indent+"    ", endLabel)
 	}
 
 	c.emit("%s", falseLabel)
@@ -283,7 +268,6 @@ func (c *Codegen) genIf(n *ast.IfNode, indent string) {
 	c.emit("%s", endLabel)
 }
 
-// Loop
 func (c *Codegen) genLoop(n *ast.LoopNode, indent string) {
 	loopLabel := "@" + c.fresh("loop")
 	bodyLabel := "@" + c.fresh("body")
@@ -309,7 +293,6 @@ func (c *Codegen) genLoop(n *ast.LoopNode, indent string) {
 				c.genStmt(stmt, indent+"    ")
 			}
 
-			// step: i += step
 			iCur := c.emitLoad(init.Name, indent+"    ")
 			iNew := "%" + c.fresh("step")
 			c.emit("%s%s =w add %s, %d", indent+"    ", iNew, iCur, n.Step)
@@ -317,7 +300,7 @@ func (c *Codegen) genLoop(n *ast.LoopNode, indent string) {
 
 			c.emit("%sjmp %s", indent+"    ", loopLabel)
 		}
-	} else { // Count
+	} else {
 		if init, ok := n.Init.(*ast.VariableNode); ok {
 			c.genVariable(init, indent)
 			c.emit("%sjmp %s", indent, loopLabel)
@@ -343,7 +326,6 @@ func (c *Codegen) genLoop(n *ast.LoopNode, indent string) {
 	c.emit("%s", endLabel)
 }
 
-// call{funcName(args)}
 func (c *Codegen) genCall(n *ast.CallNode, indent string) {
 	var args []string
 	for _, arg := range n.Args {
@@ -361,11 +343,10 @@ func (c *Codegen) genCallExpr(n *ast.CallNode, qt string, indent string) string 
 		args = append(args, "w "+val)
 	}
 	result := "%" + c.fresh("ret")
-	c.emit("%s%s = w call $%s(%s)", indent, result, n.FuncName, strings.Join(args, ","))
+	c.emit("%s%s =w call $%s(%s)", indent, result, n.FuncName, strings.Join(args, ", "))
 	return result
 }
 
-// Error[try{...}, Ok[...], Err[...]]
 func (c *Codegen) genError(n *ast.ErrorNode, indent string) {
 	okLabel := "@" + c.fresh("ok")
 	errLabel := "@" + c.fresh("err")
@@ -394,27 +375,26 @@ func (c *Codegen) genError(n *ast.ErrorNode, indent string) {
 	c.emit("%s", endLabel)
 }
 
-// QBE比較命令（符号付き整数）
+// QBE比較命令（符号付き整数）※新キーワード対応
 func (c *Codegen) qbeCompare(op string) string {
 	switch op {
-	case "eq":
+	case "equal":
 		return "ceqw"
-	case "ne":
+	case "notequal":
 		return "cnew"
-	case "lt":
+	case "less":
 		return "csltw"
-	case "le":
+	case "lesseq":
 		return "cslew"
-	case "gt":
+	case "greater":
 		return "csgtw"
-	case "ge":
+	case "greatereq":
 		return "csgew"
 	default:
 		return "ceqw"
 	}
 }
 
-// Similarity演算子 → QBE命令
 func (c *Codegen) qbeOp(op string, qt string) string {
 	switch op {
 	case "+":
@@ -442,7 +422,6 @@ func (c *Codegen) qbeOp(op string, qt string) string {
 	}
 }
 
-// Similarity型 → QBE型
 func (c *Codegen) qbeType(t string) string {
 	if qt, ok := typeMap[t]; ok {
 		return qt

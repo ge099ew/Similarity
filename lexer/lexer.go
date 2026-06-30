@@ -19,6 +19,12 @@ const (
 	TOKEN_AWAIT        TokenType = "AWAIT"
 	TOKEN_GPU          TokenType = "GPU"
 	TOKEN_MEM          TokenType = "MEM"
+	TOKEN_LE           TokenType = "LE"
+	TOKEN_LT           TokenType = "LT"
+	TOKEN_GE           TokenType = "GE"
+	TOKEN_GT           TokenType = "GT"
+	TOKEN_EQ           TokenType = "EQ"
+	TOKEN_NE           TokenType = "NE"
 	TOKEN_FUNC_PUB     TokenType = "FUNC_PUB"
 	TOKEN_MUTATION     TokenType = "MUTATION"
 
@@ -69,45 +75,53 @@ const (
 )
 
 var keywords = map[string]TokenType{
-	"Variable":    TOKEN_VARIABLE,
-	"variable":    TOKEN_VARIABLE_KEY, // 小文字のvariable
-	"Func":        TOKEN_FUNC,
-	"If":          TOKEN_IF,
-	"Loop":        TOKEN_LOOP,
-	"Error":       TOKEN_ERROR,
-	"Fatal":       TOKEN_FATAL,
-	"Import":      TOKEN_IMPORT,
-	"Extern":      TOKEN_EXTERN,
-	"Explanation": TOKEN_EXPLANATION,
-	"Async":       TOKEN_ASYNC,
-	"Await":       TOKEN_AWAIT,
-	"GPU":         TOKEN_GPU,
-	"Mem":         TOKEN_MEM,
-	"Func_pub":    TOKEN_FUNC_PUB,
-	"let":         TOKEN_LET,
-	"unclet":      TOKEN_UNCLET,
-	"for":         TOKEN_FOR,
-	"Count":       TOKEN_COUNT,
-	"check":       TOKEN_CHECK,
-	"True":        TOKEN_TRUE,
-	"False":       TOKEN_FALSE,
-	"Body":        TOKEN_BODY,
-	"step":        TOKEN_STEP,
-	"receive":     TOKEN_RECEIVE,
-	"return":      TOKEN_RETURN,
-	"call":        TOKEN_CALL,
-	"try":         TOKEN_TRY,
-	"Ok":          TOKEN_OK,
-	"Err":         TOKEN_ERR,
-	"pass":        TOKEN_PASS,
-	"def":         TOKEN_DEF,
-	"Move":        TOKEN_MOVE,
-	"Drop":        TOKEN_DROP,
-	"Raw":         TOKEN_RAW,
-	"lib":         TOKEN_LIB,
-	"true":        TOKEN_BOOL_LIT,
-	"false":       TOKEN_BOOL_LIT,
-	"Mutation":    TOKEN_MUTATION,
+	"Variable":       TOKEN_VARIABLE,
+	"variable":       TOKEN_VARIABLE_KEY, // 小文字のvariable
+	"Function":       TOKEN_FUNC,
+	"Function_pub":   TOKEN_FUNC_PUB,
+	"If":             TOKEN_IF,
+	"Loop":           TOKEN_LOOP,
+	"Error":          TOKEN_ERROR,
+	"Fatal":          TOKEN_FATAL,
+	"Import":         TOKEN_IMPORT,
+	"not_clear":      TOKEN_IDENT,
+	"Extern":         TOKEN_EXTERN,
+	"Explanation":    TOKEN_EXPLANATION,
+	"Async":          TOKEN_ASYNC,
+	"Await":          TOKEN_AWAIT,
+	"GPU":            TOKEN_GPU,
+	"Mem":            TOKEN_MEM,
+	"let":            TOKEN_LET,
+	"unchanging_let": TOKEN_UNCLET,
+	"for":            TOKEN_FOR,
+	"Count":          TOKEN_COUNT,
+	"check":          TOKEN_CHECK,
+	"True":           TOKEN_TRUE,
+	"False":          TOKEN_FALSE,
+	"Body":           TOKEN_BODY,
+	"step":           TOKEN_STEP,
+	"receive":        TOKEN_RECEIVE,
+	"return":         TOKEN_RETURN,
+	"call":           TOKEN_CALL,
+	"try":            TOKEN_TRY,
+	"Ok":             TOKEN_OK,
+	"Err":            TOKEN_ERR,
+	"pass":           TOKEN_PASS,
+	"def":            TOKEN_DEF,
+	"Move":           TOKEN_MOVE,
+	"Drop":           TOKEN_DROP,
+	"Raw":            TOKEN_RAW,
+	"lib":            TOKEN_LIB,
+	"true":           TOKEN_BOOL_LIT,
+	"false":          TOKEN_BOOL_LIT,
+	"Mutation":       TOKEN_MUTATION,
+
+	"lesseq":    TOKEN_LE,
+	"less":      TOKEN_LT,
+	"greatereq": TOKEN_GE,
+	"greater":   TOKEN_GT,
+	"equal":     TOKEN_EQ,
+	"notequal":  TOKEN_NE,
 }
 
 type Token struct {

@@ -235,13 +235,17 @@ func (c *CGen) genError(n *ast.ErrorNode, indent string) {
 }
 
 func (c *CGen) evalLiteral(node ast.Node) string {
-	if node == nil { return "0" }
+	if node == nil {
+		return "0"
+	}
 	switch n := node.(type) {
 	case *ast.LiteralNode:
-		if n.Kind == "STRING_LIT" { return fmt.Sprintf("%q", n.Value) }
+		if n.Kind == "STRING_LIT" {
+			return fmt.Sprintf("%q", n.Value)
+		}
 		return n.Value
 	case *ast.ExprNode:
-		left  := c.evalLiteral(n.Left)
+		left := c.evalLiteral(n.Left)
 		right := c.evalLiteral(n.Right)
 		return fmt.Sprintf("(%s %s %s)", left, n.Op, right)
 	}
@@ -249,18 +253,26 @@ func (c *CGen) evalLiteral(node ast.Node) string {
 }
 
 func (c *CGen) cType(t string) string {
-	if ct, ok := typeMapC[t]; ok { return ct }
+	if ct, ok := typeMapC[t]; ok {
+		return ct
+	}
 	return "int"
 }
 
 func (c *CGen) cCompare(op string) string {
 	switch op {
-	case "eq": return "=="
-	case "ne": return "!="
-	case "lt": return "<"
-	case "le": return "<="
-	case "gt": return ">"
-	case "ge": return ">="
+	case "equal":
+		return "=="
+	case "notequal":
+		return "!="
+	case "less":
+		return "<"
+	case "lesseq":
+		return "<="
+	case "greater":
+		return ">"
+	case "greatereq":
+		return ">="
 	}
 	return "=="
 }
