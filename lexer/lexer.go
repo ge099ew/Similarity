@@ -25,30 +25,36 @@ const (
 	TOKEN_GT           TokenType = "GT"
 	TOKEN_EQ           TokenType = "EQ"
 	TOKEN_NE           TokenType = "NE"
-	TOKEN_FUNC_PUB     TokenType = "FUNC_PUB"
+	TOKEN_FUNC_PUBLIC  TokenType = "FUNC_PUBLIC"
 	TOKEN_MUTATION     TokenType = "MUTATION"
 
-	TOKEN_LET     TokenType = "LET"
-	TOKEN_UNCLET  TokenType = "UNCLET"
-	TOKEN_FOR     TokenType = "FOR"
-	TOKEN_COUNT   TokenType = "COUNT"
-	TOKEN_CHECK   TokenType = "CHECK"
-	TOKEN_TRUE    TokenType = "TRUE"
-	TOKEN_FALSE   TokenType = "FALSE"
-	TOKEN_BODY    TokenType = "BODY"
-	TOKEN_STEP    TokenType = "STEP"
-	TOKEN_RECEIVE TokenType = "RECEIVE"
-	TOKEN_RETURN  TokenType = "RETURN"
-	TOKEN_CALL    TokenType = "CALL"
-	TOKEN_TRY     TokenType = "TRY"
-	TOKEN_OK      TokenType = "OK"
-	TOKEN_ERR     TokenType = "ERR"
-	TOKEN_PASS    TokenType = "PASS"
-	TOKEN_DEF     TokenType = "DEF"
-	TOKEN_MOVE    TokenType = "MOVE"
-	TOKEN_DROP    TokenType = "DROP"
-	TOKEN_RAW     TokenType = "RAW"
-	TOKEN_LIB     TokenType = "LIB"
+	TOKEN_LET      TokenType = "LET"
+	TOKEN_UNCLET   TokenType = "UNCLET"
+	TOKEN_FOR      TokenType = "FOR"
+	TOKEN_COUNT    TokenType = "COUNT"
+	TOKEN_CHECK    TokenType = "CHECK"
+	TOKEN_TRUE     TokenType = "TRUE"
+	TOKEN_FALSE    TokenType = "FALSE"
+	TOKEN_BODY     TokenType = "BODY"
+	TOKEN_STEP     TokenType = "STEP"
+	TOKEN_RECEIVE  TokenType = "RECEIVE"
+	TOKEN_RETURN   TokenType = "RETURN"
+	TOKEN_CALL     TokenType = "CALL"
+	TOKEN_TRY      TokenType = "TRY"
+	TOKEN_OK       TokenType = "OK"
+	TOKEN_ERR      TokenType = "ERR"
+	TOKEN_PASS     TokenType = "PASS"
+	TOKEN_DEF      TokenType = "DEF"
+	TOKEN_MOVE     TokenType = "MOVE"
+	TOKEN_DROP     TokenType = "DROP"
+	TOKEN_RAW      TokenType = "RAW"
+	TOKEN_LIB      TokenType = "LIB"
+	TOKEN_ADDR     TokenType = "ADDR"
+	TOKEN_DEREF    TokenType = "DEREF"
+	TOKEN_CAST     TokenType = "CAST"
+	TOKEN_INDEX    TokenType = "INDEX"
+	TOKEN_BREAK    TokenType = "BREAK"
+	TOKEN_CONTINUE TokenType = "CONTINUE"
 
 	TOKEN_LBRACKET TokenType = "["
 	TOKEN_RBRACKET TokenType = "]"
@@ -75,46 +81,52 @@ const (
 )
 
 var keywords = map[string]TokenType{
-	"Variable":       TOKEN_VARIABLE,
-	"variable":       TOKEN_VARIABLE_KEY, // 小文字のvariable
-	"Function":       TOKEN_FUNC,
-	"Function_pub":   TOKEN_FUNC_PUB,
-	"If":             TOKEN_IF,
-	"Loop":           TOKEN_LOOP,
-	"Error":          TOKEN_ERROR,
-	"Fatal":          TOKEN_FATAL,
-	"Import":         TOKEN_IMPORT,
-	"not_clear":      TOKEN_IDENT,
-	"Extern":         TOKEN_EXTERN,
-	"Explanation":    TOKEN_EXPLANATION,
-	"Async":          TOKEN_ASYNC,
-	"Await":          TOKEN_AWAIT,
-	"GPU":            TOKEN_GPU,
-	"Mem":            TOKEN_MEM,
-	"let":            TOKEN_LET,
-	"unchanging_let": TOKEN_UNCLET,
-	"for":            TOKEN_FOR,
-	"Count":          TOKEN_COUNT,
-	"check":          TOKEN_CHECK,
-	"True":           TOKEN_TRUE,
-	"False":          TOKEN_FALSE,
-	"Body":           TOKEN_BODY,
-	"step":           TOKEN_STEP,
-	"receive":        TOKEN_RECEIVE,
-	"return":         TOKEN_RETURN,
-	"call":           TOKEN_CALL,
-	"try":            TOKEN_TRY,
-	"Ok":             TOKEN_OK,
-	"Err":            TOKEN_ERR,
-	"pass":           TOKEN_PASS,
-	"def":            TOKEN_DEF,
-	"Move":           TOKEN_MOVE,
-	"Drop":           TOKEN_DROP,
-	"Raw":            TOKEN_RAW,
-	"lib":            TOKEN_LIB,
-	"true":           TOKEN_BOOL_LIT,
-	"false":          TOKEN_BOOL_LIT,
-	"Mutation":       TOKEN_MUTATION,
+	"Variable":        TOKEN_VARIABLE,
+	"variable":        TOKEN_VARIABLE_KEY, // 小文字のvariable
+	"Function":        TOKEN_FUNC,
+	"Function_public": TOKEN_FUNC_PUBLIC,
+	"If":              TOKEN_IF,
+	"Loop":            TOKEN_LOOP,
+	"Error":           TOKEN_ERROR,
+	"Fatal":           TOKEN_FATAL,
+	"Import":          TOKEN_IMPORT,
+	"not_clear":       TOKEN_IDENT,
+	"Extern":          TOKEN_EXTERN,
+	"Explanation":     TOKEN_EXPLANATION,
+	"Async":           TOKEN_ASYNC,
+	"Await":           TOKEN_AWAIT,
+	"GPU":             TOKEN_GPU,
+	"Mem":             TOKEN_MEM,
+	"let":             TOKEN_LET,
+	"unchanging_let":  TOKEN_UNCLET,
+	"for":             TOKEN_FOR,
+	"Count":           TOKEN_COUNT,
+	"check":           TOKEN_CHECK,
+	"True":            TOKEN_TRUE,
+	"False":           TOKEN_FALSE,
+	"Body":            TOKEN_BODY,
+	"step":            TOKEN_STEP,
+	"receive":         TOKEN_RECEIVE,
+	"return":          TOKEN_RETURN,
+	"call":            TOKEN_CALL,
+	"try":             TOKEN_TRY,
+	"Ok":              TOKEN_OK,
+	"Err":             TOKEN_ERR,
+	"pass":            TOKEN_PASS,
+	"def":             TOKEN_DEF,
+	"Move":            TOKEN_MOVE,
+	"Drop":            TOKEN_DROP,
+	"Raw":             TOKEN_RAW,
+	"lib":             TOKEN_LIB,
+	"true":            TOKEN_BOOL_LIT,
+	"false":           TOKEN_BOOL_LIT,
+	"Mutation":        TOKEN_MUTATION,
+	"addr":            TOKEN_ADDR,
+	"deref":           TOKEN_DEREF,
+	"cast":            TOKEN_CAST,
+	"index":           TOKEN_INDEX,
+	"break":           TOKEN_BREAK,
+	"continue":        TOKEN_CONTINUE,
 
 	"lesseq":    TOKEN_LE,
 	"less":      TOKEN_LT,

@@ -78,7 +78,7 @@ func (p *Parser) parseStatement() ast.Node {
 		return p.parseLoop()
 	case lexer.TOKEN_FUNC:
 		return p.parseFunc(false)
-	case lexer.TOKEN_FUNC_PUB:
+	case lexer.TOKEN_FUNC_PUBLIC:
 		return p.parseFunc(true)
 	case lexer.TOKEN_ERROR:
 		return p.parseError()
@@ -539,7 +539,7 @@ func (p *Parser) parseExpr() *ast.ExprNode {
 	// (a, b) → 2つのオペランドを取り出す
 	p.expect(lexer.TOKEN_LPAREN)
 	node.Left = p.parseArg()
-	if p.cur().Type == lexer.TOKEN_COMMA {
+	if p.cur().Type == lexer.TOKEN_COLON {
 		p.advance()
 		node.Right = p.parseArg()
 	}

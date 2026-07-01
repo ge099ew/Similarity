@@ -6,9 +6,9 @@ Explanation[Application{Game(type:RPG, name:TestGame)}]
 Import[mylib{}]
 
 Variable[let{int(hp:100)}]
-Variable[unclet{int(MAX_HP:100)}]
-
-Func[heal{
+Variable[unchanging_let{int(MAX_HP:100)}]
+  
+Function[heal{
   receive{int(amount)},
   If[
     check{le(hp, 0)},
@@ -18,7 +18,7 @@ Func[heal{
   return{}
 }]
 
-Func_pub[main{
+Function_public[main{
   receive{},
   call{heal(10)},
   return{}

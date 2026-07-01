@@ -1,6 +1,6 @@
 Explanation[Application{Test(type:mutation)}]
 
-Func_pub[main{
+Function_public[main{
   receive{},
   Variable[let{int(x:10)}],
   Mutation[variable{int(x:30)}],

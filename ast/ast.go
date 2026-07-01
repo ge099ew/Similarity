@@ -149,3 +149,78 @@ type ExprNode struct {
 }
 
 func (e *ExprNode) TokenLiteral() string { return e.Op }
+
+// 非同期
+// Async[{処理}]
+type AsyncNode struct {
+	Body []Node
+}
+
+func (a *AsyncNode) TokenLiteral() string { return "Async" }
+
+// Await[task]
+type AwaitNode struct {
+	Target string
+}
+
+func (a *AwaitNode) TokenLiteral() string { return "Await" }
+
+// GPU[{処理}]
+type GPUNode struct {
+	Body []Node
+}
+
+func (g *GPUNode) TokenLiteral() string { return "GPU" }
+
+// メモリ・ポインタ
+// Mem[risk{...}] / Mem[Raw{...}]
+type RawMemNode struct {
+	Body []Node
+}
+
+func (r *RawMemNode) TokenLiteral() string { return "Mem" }
+
+// ポインタのアドレス取得
+// addr{x} → xのアドレスを取得
+type AddressNode struct {
+	Name string
+}
+
+func (a *AddressNode) TokenLiteral() string { return "addr" }
+
+// ポインタの参照外し
+// deref{ptr} → ptrが指す値を取得
+type DerefNode struct {
+	Name string
+}
+
+func (d *DerefNode) TokenLiteral() string { return "deref" }
+
+// 型キャスト
+// cast{int(x)} → xをintにキャスト
+type CastNode struct {
+	Type  string
+	Value Node
+}
+
+func (c *CastNode) TokenLiteral() string { return "cast" }
+
+// 配列アクセス
+// index{arr(i)} → arr[i]
+type IndexNode struct {
+	Name  string
+	Index Node
+}
+
+func (i *IndexNode) TokenLiteral() string { return "index" }
+
+// ループ制御
+// break{}
+type BreakNode struct{}
+
+func (b *BreakNode) TokenLiteral() string { return "break" }
+
+// continue{}
+type ContinueNode struct{}
+
+func (c *ContinueNode) TokenLiteral() string { return "continue" }

@@ -1,6 +1,6 @@
 Explanation[Application{Benchmark(type:sumloop)}]
 
-Func_pub[main{
+Function_public[main{
   receive{},
   Variable[let{int(sum:0)}],
   Loop[for{int(i:0), lt(i,100000000), step{1}},
