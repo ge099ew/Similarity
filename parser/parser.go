@@ -5,16 +5,22 @@ import (
 	"similarity/ast"
 	"similarity/lexer"
 	"strconv"
+	"sync"
 )
 
 type Parser struct {
 	tokens []lexer.Token
 	pos    int
 	Errors []string
+	arena  *ast.Arena // ← 追加
 }
 
 func New(tokens []lexer.Token) *Parser {
-	return &Parser{tokens: tokens, pos: 0}
+	return &Parser{
+		tokens: tokens,
+		pos:    0,
+		arena:  ast.NewArena(),
+	}
 }
 
 func (p *Parser) cur() lexer.Token { return p.tokens[p.pos] }
@@ -56,12 +62,61 @@ func (p *Parser) ParseProgram() *ast.Program {
 		prog.Explanation = p.parseExplanation()
 	}
 
+	// トップレベルの文を先に全部収集
+	var rawStmts []lexer.Token
+	startPositions := []int{}
 	for p.cur().Type != lexer.TOKEN_EOF {
-		if stmt := p.parseStatement(); stmt != nil {
+		startPositions = append(startPositions, p.pos)
+		p.skipTopLevel() // 一つのトップレベル文をスキップ
+	}
+
+	// goroutineで並列パース
+	results := make([]ast.Node, len(startPositions))
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	for i, startPos := range startPositions {
+		wg.Add(1)
+		go func(idx, pos int) {
+			defer wg.Done()
+			subParser := New(p.tokens[pos:])
+			stmt := subParser.parseStatement()
+			mu.Lock()
+			results[idx] = stmt
+			if len(subParser.Errors) > 0 {
+				p.Errors = append(p.Errors, subParser.Errors...)
+			}
+			mu.Unlock()
+		}(i, startPos)
+	}
+	wg.Wait()
+
+	for _, stmt := range results {
+		if stmt != nil {
 			prog.Statements = append(prog.Statements, stmt)
 		}
 	}
+
+	_ = rawStmts
 	return prog
+}
+
+// トップレベルの文を一つスキップ
+func (p *Parser) skipTopLevel() {
+	depth := 0
+	for p.cur().Type != lexer.TOKEN_EOF {
+		switch p.cur().Type {
+		case lexer.TOKEN_LBRACKET, lexer.TOKEN_LBRACE, lexer.TOKEN_LPAREN:
+			depth++
+		case lexer.TOKEN_RBRACKET, lexer.TOKEN_RBRACE, lexer.TOKEN_RPAREN:
+			depth--
+			if depth == 0 {
+				p.advance()
+				return
+			}
+		}
+		p.advance()
+	}
 }
 
 func (p *Parser) parseStatement() ast.Node {
@@ -90,6 +145,26 @@ func (p *Parser) parseStatement() ast.Node {
 		return p.parseExtern()
 	case lexer.TOKEN_CALL:
 		return p.parseCall()
+	case lexer.TOKEN_ASYNC:
+		return p.parseAsync()
+	case lexer.TOKEN_AWAIT:
+		return p.parseAwait()
+	case lexer.TOKEN_GPU:
+		return p.parseGPU()
+	case lexer.TOKEN_MEM:
+		return p.parseMem()
+	case lexer.TOKEN_BREAK:
+		return p.parseBreak()
+	case lexer.TOKEN_CONTINUE:
+		return p.parseContinue()
+	case lexer.TOKEN_CAST:
+		return p.parseCast()
+	case lexer.TOKEN_INDEX:
+		return p.parseIndex()
+	case lexer.TOKEN_ADDR:
+		return p.parseAddress()
+	case lexer.TOKEN_DEREF:
+		return p.parseDeref()
 	default:
 		p.errorf("文として解釈できません")
 		p.advance()
@@ -168,7 +243,7 @@ func (p *Parser) parseVariable() *ast.VariableNode {
 	p.advance() // skip let/unclet
 	p.expect(lexer.TOKEN_LBRACE)
 
-	node := &ast.VariableNode{Mutable: mutable}
+	node := p.arena.Add(&ast.VariableNode{Mutable: mutable}).(*ast.VariableNode)
 	node.Type = p.cur().Literal
 	p.advance() // int / float / bool / String / Box_int ...
 	p.expect(lexer.TOKEN_LPAREN)
@@ -222,7 +297,7 @@ func (p *Parser) parseLoop() *ast.LoopNode {
 	p.advance() // skip Loop
 	p.expect(lexer.TOKEN_LBRACKET)
 
-	node := &ast.LoopNode{}
+	node := p.arena.Add(&ast.LoopNode{}).(*ast.LoopNode)
 	if p.cur().Type == lexer.TOKEN_FOR {
 		node.Kind = "for"
 		p.advance()
@@ -263,7 +338,7 @@ func (p *Parser) parseFunc(pub bool) *ast.FuncNode {
 	p.advance() // skip Func
 	p.expect(lexer.TOKEN_LBRACKET)
 
-	node := &ast.FuncNode{Public: pub}
+	node := p.arena.Add(&ast.FuncNode{Public: pub}).(*ast.FuncNode)
 	node.Name = p.cur().Literal
 	p.advance()
 	p.expect(lexer.TOKEN_LBRACE)
@@ -331,7 +406,7 @@ func (p *Parser) parseError() *ast.ErrorNode {
 		return node
 	}
 
-	node := &ast.ErrorNode{}
+	node := p.arena.Add(&ast.ErrorNode{}).(*ast.ErrorNode)
 	p.expect(lexer.TOKEN_TRY)
 	p.expect(lexer.TOKEN_LBRACE)
 	node.Try = p.parseBlock()
@@ -380,7 +455,7 @@ func (p *Parser) parseError() *ast.ErrorNode {
 func (p *Parser) parseFatal() *ast.FatalNode {
 	p.advance() // skip Fatal
 	p.expect(lexer.TOKEN_LBRACKET)
-	node := &ast.FatalNode{}
+	node := p.arena.Add(&ast.FatalNode{}).(*ast.FatalNode)
 	if p.cur().Type == lexer.TOKEN_IDENT && p.cur().Literal == "type" {
 		p.advance()
 		p.expect(lexer.TOKEN_LBRACE)
@@ -406,7 +481,7 @@ func (p *Parser) parseFatal() *ast.FatalNode {
 func (p *Parser) parseImport() *ast.ImportNode {
 	p.advance() // skip Import
 	p.expect(lexer.TOKEN_LBRACKET)
-	node := &ast.ImportNode{Module: p.cur().Literal}
+	node := p.arena.Add(&ast.ImportNode{Module: p.cur().Literal}).(*ast.ImportNode)
 	p.advance()
 	p.expect(lexer.TOKEN_LBRACE)
 	for p.cur().Type != lexer.TOKEN_RBRACE && p.cur().Type != lexer.TOKEN_EOF {
@@ -427,7 +502,7 @@ func (p *Parser) parseExtern() *ast.ExternNode {
 	p.expect(lexer.TOKEN_LBRACKET)
 	p.advance() // skip C
 	p.expect(lexer.TOKEN_LBRACE)
-	node := &ast.ExternNode{}
+	node := p.arena.Add(&ast.ExternNode{}).(*ast.ExternNode)
 	// lib{...}
 	if p.cur().Type == lexer.TOKEN_LIB {
 		p.advance()
@@ -453,7 +528,7 @@ func (p *Parser) parseExtern() *ast.ExternNode {
 func (p *Parser) parseCall() *ast.CallNode {
 	p.advance() // skip call
 	p.expect(lexer.TOKEN_LBRACE)
-	node := &ast.CallNode{FuncName: p.cur().Literal}
+	node := p.arena.Add(&ast.CallNode{FuncName: p.cur().Literal}).(*ast.CallNode)
 	p.advance()
 	p.expect(lexer.TOKEN_LPAREN)
 	for p.cur().Type != lexer.TOKEN_RPAREN && p.cur().Type != lexer.TOKEN_EOF {
@@ -471,7 +546,7 @@ func (p *Parser) parseCall() *ast.CallNode {
 func (p *Parser) parseReturn() *ast.ReturnNode {
 	p.advance() // skip return
 	p.expect(lexer.TOKEN_LBRACE)
-	node := &ast.ReturnNode{}
+	node := p.arena.Add(&ast.ReturnNode{}).(*ast.ReturnNode)
 	if p.cur().Type != lexer.TOKEN_RBRACE {
 		node.Value = p.parseLiteral()
 	}
@@ -499,7 +574,7 @@ func (p *Parser) parseBlock() []ast.Node {
 
 // int(x:10) / float(x:3.14) / bool(x:true) / String(x:"hi")
 func (p *Parser) parseTypedValue() *ast.VariableNode {
-	node := &ast.VariableNode{Type: p.cur().Literal, Mutable: true}
+	node := p.arena.Add(&ast.VariableNode{Type: p.cur().Literal, Mutable: true}).(*ast.VariableNode)
 	p.advance()
 	p.expect(lexer.TOKEN_LPAREN)
 	node.Name = p.cur().Literal
@@ -530,7 +605,7 @@ func (p *Parser) parseExpr() *ast.ExprNode {
 	p.advance() // skip + - * /
 	p.expect(lexer.TOKEN_LBRACE)
 
-	node := &ast.ExprNode{Op: op}
+	node := p.arena.Add(&ast.ExprNode{Op: op}).(*ast.ExprNode)
 
 	// 型名 (int, float, ...) を読む
 	node.Type = p.cur().Literal
@@ -578,4 +653,115 @@ func (p *Parser) parseCondition() *ast.ConditionNode {
 	p.advance()
 	p.expect(lexer.TOKEN_RPAREN)
 	return &ast.ConditionNode{Op: op, Left: left, Right: right}
+}
+
+// Async[{処理}]
+func (p *Parser) parseAsync() *ast.AsyncNode {
+	p.advance() // skip Async
+	p.expect(lexer.TOKEN_LBRACKET)
+	p.expect(lexer.TOKEN_LBRACE)
+	node := p.arena.Add(&ast.AsyncNode{}).(*ast.AsyncNode)
+	node.Body = p.parseBlock()
+	p.expect(lexer.TOKEN_RBRACE)
+	p.expect(lexer.TOKEN_RBRACKET)
+	return node
+}
+
+// Await[task]
+func (p *Parser) parseAwait() *ast.AwaitNode {
+	p.advance() // skip Await
+	p.expect(lexer.TOKEN_LBRACKET)
+	node := p.arena.Add(&ast.AwaitNode{Target: p.cur().Literal}).(*ast.AwaitNode)
+	p.advance()
+	p.expect(lexer.TOKEN_RBRACKET)
+	return node
+}
+
+// GPU[{処理}]
+func (p *Parser) parseGPU() *ast.GPUNode {
+	p.advance() // skip GPU
+	p.expect(lexer.TOKEN_LBRACKET)
+	p.expect(lexer.TOKEN_LBRACE)
+	node := p.arena.Add(&ast.GPUNode{}).(*ast.GPUNode)
+	node.Body = p.parseBlock()
+	p.expect(lexer.TOKEN_RBRACE)
+	p.expect(lexer.TOKEN_RBRACKET)
+	return node
+}
+
+// Mem[risk{...}] / Mem[Raw{...}]
+func (p *Parser) parseMem() *ast.RawMemNode {
+	p.advance() // skip Mem
+	p.expect(lexer.TOKEN_LBRACKET)
+	p.advance() // skip risk/Raw
+	p.expect(lexer.TOKEN_LBRACE)
+	node := p.arena.Add(&ast.RawMemNode{}).(*ast.RawMemNode)
+	node.Body = p.parseBlock()
+	p.expect(lexer.TOKEN_RBRACE)
+	p.expect(lexer.TOKEN_RBRACKET)
+	return node
+}
+
+// break{}
+func (p *Parser) parseBreak() *ast.BreakNode {
+	p.advance() // skip break
+	p.expect(lexer.TOKEN_LBRACE)
+	p.expect(lexer.TOKEN_RBRACE)
+	return &ast.BreakNode{}
+}
+
+// continue{}
+func (p *Parser) parseContinue() *ast.ContinueNode {
+	p.advance() // skip continue
+	p.expect(lexer.TOKEN_LBRACE)
+	p.expect(lexer.TOKEN_RBRACE)
+	return &ast.ContinueNode{}
+}
+
+// cast{int(x)}
+func (p *Parser) parseCast() *ast.CastNode {
+	p.advance() // skip cast
+	p.expect(lexer.TOKEN_LBRACE)
+	node := p.arena.Add(&ast.CastNode{}).(*ast.CastNode)
+	node.Type = p.cur().Literal
+	p.advance()
+	p.expect(lexer.TOKEN_LPAREN)
+	node.Value = p.parseLiteral()
+	p.expect(lexer.TOKEN_RPAREN)
+	p.expect(lexer.TOKEN_RBRACE)
+	return node
+}
+
+// index{arr(i)}
+func (p *Parser) parseIndex() *ast.IndexNode {
+	p.advance() // skip index
+	p.expect(lexer.TOKEN_LBRACE)
+	node := p.arena.Add(&ast.IndexNode{}).(*ast.IndexNode)
+	node.Name = p.cur().Literal
+	p.advance()
+	p.expect(lexer.TOKEN_LPAREN)
+	node.Index = p.parseLiteral()
+	p.expect(lexer.TOKEN_RPAREN)
+	p.expect(lexer.TOKEN_RBRACE)
+	return node
+}
+
+// addr{x}
+func (p *Parser) parseAddress() *ast.AddressNode {
+	p.advance() // skip addr
+	p.expect(lexer.TOKEN_LBRACE)
+	node := p.arena.Add(&ast.AddressNode{Name: p.cur().Literal}).(*ast.AddressNode)
+	p.advance()
+	p.expect(lexer.TOKEN_RBRACE)
+	return node
+}
+
+// deref{ptr}
+func (p *Parser) parseDeref() *ast.DerefNode {
+	p.advance() // skip deref
+	p.expect(lexer.TOKEN_LBRACE)
+	node := p.arena.Add(&ast.DerefNode{Name: p.cur().Literal}).(*ast.DerefNode)
+	p.advance()
+	p.expect(lexer.TOKEN_RBRACE)
+	return node
 }

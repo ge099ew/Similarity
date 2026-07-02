@@ -280,12 +280,19 @@ func (l *Lexer) readNumber() Token {
 
 func (l *Lexer) readIdentOrKeyword() Token {
 	start := l.pos
-	for l.pos < len(l.input) && (isLetter(l.input[l.pos]) || isDigit(l.input[l.pos]) || l.input[l.pos] == '_') {
+	for l.pos < len(l.input) {
+		ch := l.input[l.pos]
+		if !isLetter(ch) && !isDigit(ch) && ch != '_' {
+			break
+		}
 		l.pos++
 	}
 	lit := l.input[start:l.pos]
-	if tt, ok := keywords[lit]; ok {
-		return Token{tt, lit, l.line}
+	// 長さ2未満はキーワードなし（最短は"If"の2文字）
+	if len(lit) >= 2 {
+		if tt, ok := keywords[lit]; ok {
+			return Token{tt, lit, l.line}
+		}
 	}
 	return Token{TOKEN_IDENT, lit, l.line}
 }

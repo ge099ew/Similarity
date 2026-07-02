@@ -1,6 +1,6 @@
 # Similarity - Application
-# value: Benchmark
 # type: sumloop
+# value: Benchmark
 
 export function w $sim_main() {
 @start
@@ -11,7 +11,7 @@ export function w $sim_main() {
     jmp @loop1
 @loop1
     %t5 =w loadw %i.ptr
-    %cond4 =w csltw %t5, 100000000
+    %cond4 =w ceqw %t5, 100000000
     jnz %cond4, @body2, @lend3
 @body2
         %t7 =w loadw %sum.ptr

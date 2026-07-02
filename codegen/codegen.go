@@ -21,10 +21,12 @@ var typeMap = map[string]string{
 }
 
 type Codegen struct {
-	buf     strings.Builder
-	counter int
-	vars    map[string]string
-	params  map[string]string
+	buf          strings.Builder
+	counter      int
+	vars         map[string]string
+	params       map[string]string
+	loopEndLabel string
+	loopLabel    string
 }
 
 func New() *Codegen {
@@ -153,6 +155,59 @@ func (c *Codegen) genStmt(node ast.Node, indent string) {
 		c.genError(n, indent)
 	case *ast.FuncNode:
 		c.genFunc(n)
+	case *ast.AsyncNode:
+		c.emit("%s# Async block", indent)
+		for _, stmt := range n.Body {
+			c.genStmt(stmt, indent)
+		}
+
+	case *ast.AwaitNode:
+		c.emit("%s# Await: %s", indent, n.Target)
+
+	case *ast.GPUNode:
+		c.emit("%s# GPU block", indent)
+		for _, stmt := range n.Body {
+			c.genStmt(stmt, indent)
+		}
+
+	case *ast.RawMemNode:
+		c.emit("%s# Mem[risk] block", indent)
+		for _, stmt := range n.Body {
+			c.genStmt(stmt, indent)
+		}
+
+	case *ast.BreakNode:
+		if c.loopEndLabel != "" {
+			c.emit("%sjmp %s", indent, c.loopEndLabel)
+		} else {
+			c.emit("%s# Error: break outside loop", indent)
+		}
+
+	case *ast.ContinueNode:
+		if c.loopLabel != "" {
+			c.emit("%sjmp %s", indent, c.loopLabel)
+		} else {
+			c.emit("%s# Error: continue outside loop", indent)
+		}
+
+	case *ast.CastNode:
+		val := c.evalToTemp(n.Value, c.qbeType(n.Type), indent)
+		result := "%" + c.fresh("cast")
+		c.emit("%s%s =w copy %s", indent, result, val)
+
+	case *ast.AddressNode:
+		if ptr, ok := c.vars[n.Name]; ok {
+			c.emit("%s# addr: %s → %s", indent, n.Name, ptr)
+		}
+
+	case *ast.DerefNode:
+		tmp := "%" + c.fresh("deref")
+		c.emit("%s%s =w loadw %s", indent, tmp, n.Name)
+
+	case *ast.IndexNode:
+		idx := c.evalToTemp(n.Index, "w", indent)
+		tmp := "%" + c.fresh("idx")
+		c.emit("%s%s =w loadw %s", indent, tmp, idx)
 	}
 }
 
@@ -272,6 +327,10 @@ func (c *Codegen) genLoop(n *ast.LoopNode, indent string) {
 	loopLabel := "@" + c.fresh("loop")
 	bodyLabel := "@" + c.fresh("body")
 	endLabel := "@" + c.fresh("lend")
+	prevEnd := c.loopEndLabel
+	prevLoop := c.loopLabel
+	c.loopEndLabel = endLabel
+	c.loopLabel = loopLabel
 
 	if n.Kind == "for" {
 		if init, ok := n.Init.(*ast.VariableNode); ok {
@@ -324,6 +383,8 @@ func (c *Codegen) genLoop(n *ast.LoopNode, indent string) {
 		}
 	}
 	c.emit("%s", endLabel)
+	c.loopEndLabel = prevEnd
+	c.loopLabel = prevLoop
 }
 
 func (c *Codegen) genCall(n *ast.CallNode, indent string) {
