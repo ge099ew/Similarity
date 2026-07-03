@@ -648,7 +648,7 @@ func (p *Parser) parseCondition() *ast.ConditionNode {
 	p.expect(lexer.TOKEN_LPAREN)
 	left := p.cur().Literal
 	p.advance()
-	p.expect(lexer.TOKEN_COMMA)
+	p.expect(lexer.TOKEN_COLON) // カンマ→コロン
 	right := p.cur().Literal
 	p.advance()
 	p.expect(lexer.TOKEN_RPAREN)
