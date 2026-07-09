@@ -20,19 +20,35 @@ var typeMap = map[string]string{
 	"Array_bool":  "l",
 }
 
+// 型のバイトサイズ
+var typeSizeMap = map[string]int{
+	"int":   4,
+	"float": 4,
+	"bool":  4,
+	"String": 8,
+	"Box_int":     8,
+	"Box_float":   8,
+	"Array_int":   8,
+	"Array_float": 8,
+	"Array_bool":  8,
+}
+
 type Codegen struct {
 	buf          strings.Builder
 	counter      int
-	vars         map[string]string
-	params       map[string]string
+	vars         map[string]string // 変数名 → ptrレジスタ名
+	varTypes     map[string]string // 変数名 → Similarity型
+	params       map[string]string // パラメータ名 → QBEレジスタ名
 	loopEndLabel string
 	loopLabel    string
+	asyncCounter int // goroutine ID用
 }
 
 func New() *Codegen {
 	return &Codegen{
-		vars:   make(map[string]string),
-		params: make(map[string]string),
+		vars:     make(map[string]string),
+		varTypes: make(map[string]string),
+		params:   make(map[string]string),
 	}
 }
 
@@ -83,12 +99,15 @@ func (c *Codegen) genTopLevel(node ast.Node) {
 
 func (c *Codegen) genFunc(fn *ast.FuncNode) {
 	c.vars = make(map[string]string)
+	c.varTypes = make(map[string]string)
+	c.params = make(map[string]string)
 
 	var params []string
 	for _, p := range fn.Params {
 		qt := c.qbeType(p.Type)
 		pv := "%" + p.Name
 		c.params[p.Name] = pv
+		c.varTypes[p.Name] = p.Type
 		params = append(params, fmt.Sprintf("%s %s", qt, pv))
 	}
 
@@ -142,8 +161,9 @@ func (c *Codegen) genStmt(node ast.Node, indent string) {
 			c.emit("%s# Error: %s は未宣言", indent, n.Name)
 			return
 		}
-		val := c.evalToTemp(n.Value, c.qbeType(n.Type), indent)
-		c.emit("%sstorew %s, %s", indent, val, ptr)
+		qt := c.qbeType(n.Type)
+		val := c.evalToTemp(n.Value, qt, indent)
+		c.emitStore(qt, val, ptr, indent)
 	case *ast.LoopNode:
 		c.genLoop(n, indent)
 	case *ast.CallNode:
@@ -155,34 +175,28 @@ func (c *Codegen) genStmt(node ast.Node, indent string) {
 		c.genError(n, indent)
 	case *ast.FuncNode:
 		c.genFunc(n)
+
+	// ===== Async/Await =====
 	case *ast.AsyncNode:
-		c.emit("%s# Async block", indent)
-		for _, stmt := range n.Body {
-			c.genStmt(stmt, indent)
-		}
-
+		c.genAsync(n, indent)
 	case *ast.AwaitNode:
-		c.emit("%s# Await: %s", indent, n.Target)
+		c.genAwait(n, indent)
 
+	// ===== GPU =====
 	case *ast.GPUNode:
-		c.emit("%s# GPU block", indent)
-		for _, stmt := range n.Body {
-			c.genStmt(stmt, indent)
-		}
+		c.genGPU(n, indent)
 
+	// ===== Mem[risk{}] =====
 	case *ast.RawMemNode:
-		c.emit("%s# Mem[risk] block", indent)
-		for _, stmt := range n.Body {
-			c.genStmt(stmt, indent)
-		}
+		c.genRawMem(n, indent)
 
+	// ===== ループ制御 =====
 	case *ast.BreakNode:
 		if c.loopEndLabel != "" {
 			c.emit("%sjmp %s", indent, c.loopEndLabel)
 		} else {
 			c.emit("%s# Error: break outside loop", indent)
 		}
-
 	case *ast.ContinueNode:
 		if c.loopLabel != "" {
 			c.emit("%sjmp %s", indent, c.loopLabel)
@@ -190,58 +204,261 @@ func (c *Codegen) genStmt(node ast.Node, indent string) {
 			c.emit("%s# Error: continue outside loop", indent)
 		}
 
+	// ===== cast =====
 	case *ast.CastNode:
-		val := c.evalToTemp(n.Value, c.qbeType(n.Type), indent)
-		result := "%" + c.fresh("cast")
-		c.emit("%s%s =w copy %s", indent, result, val)
+		c.genCast(n, indent)
 
+	// ===== ポインタ =====
 	case *ast.AddressNode:
-		if ptr, ok := c.vars[n.Name]; ok {
-			c.emit("%s# addr: %s → %s", indent, n.Name, ptr)
-		}
-
+		c.genAddress(n, indent)
 	case *ast.DerefNode:
-		tmp := "%" + c.fresh("deref")
-		c.emit("%s%s =w loadw %s", indent, tmp, n.Name)
+		c.genDeref(n, indent)
 
+	// ===== 配列アクセス =====
 	case *ast.IndexNode:
-		idx := c.evalToTemp(n.Index, "w", indent)
-		tmp := "%" + c.fresh("idx")
-		c.emit("%s%s =w loadw %s", indent, tmp, idx)
+		c.genIndex(n, indent)
 	}
 }
 
+// ===== 変数 =====
+
 func (c *Codegen) genVariable(v *ast.VariableNode, indent string) {
 	qt := c.qbeType(v.Type)
+	size := c.typeSize(v.Type)
 	ptrVar := "%" + v.Name + ".ptr"
 
 	if _, exists := c.vars[v.Name]; !exists {
 		c.vars[v.Name] = ptrVar
-		c.emit("%s%s =l alloc4 4", indent, ptrVar)
+		c.varTypes[v.Name] = v.Type
+		c.emit("%s%s =l alloc%d %d", indent, ptrVar, size, size)
 	}
 
 	ptr := c.vars[v.Name]
 	if v.Value != nil {
 		val := c.evalToTemp(v.Value, qt, indent)
-		c.emit("%sstorew %s, %s", indent, val, ptr)
+		c.emitStore(qt, val, ptr, indent)
 	} else {
-		c.emit("%sstorew 0, %s", indent, ptr)
+		c.emitStore(qt, "0", ptr, indent)
+	}
+}
+
+// ===== ポインタ本実装 =====
+
+// addr{x} → xのスタックアドレスをlongとして返す
+func (c *Codegen) genAddress(n *ast.AddressNode, indent string) string {
+	if ptr, ok := c.vars[n.Name]; ok {
+		// ptrはすでにlongのアドレス
+		result := "%" + c.fresh("addr")
+		c.emit("%s%s =l copy %s", indent, result, ptr)
+		return result
+	}
+	c.emit("%s# Error: addr: %s は未宣言", indent, n.Name)
+	return "0"
+}
+
+// addr{x} を式として評価（evalToTemp内から呼ばれる）
+func (c *Codegen) evalAddress(n *ast.AddressNode, indent string) string {
+	return c.genAddress(n, indent)
+}
+
+// deref{ptr} → ptrが指す値をロード
+func (c *Codegen) genDeref(n *ast.DerefNode, indent string) string {
+	// ptrレジスタを取得
+	ptrVal := c.emitLoad(n.Name, indent)
+	result := "%" + c.fresh("deref")
+	c.emit("%s%s =w loadw %s", indent, result, ptrVal)
+	return result
+}
+
+// ===== 配列アクセス本実装 =====
+// index{arr(i)} → arr の先頭アドレス + i*elemSize をロード
+
+func (c *Codegen) genIndex(n *ast.IndexNode, indent string) string {
+	arrPtr, ok := c.vars[n.Name]
+	if !ok {
+		c.emit("%s# Error: index: %s は未宣言", indent, n.Name)
+		return "0"
 	}
 
-	_ = qt
+	// 配列の先頭アドレスをロード（long）
+	base := "%" + c.fresh("base")
+	c.emit("%s%s =l loadl %s", indent, base, arrPtr)
+
+	// インデックスを評価
+	idxVal := c.evalToTemp(n.Index, "w", indent)
+
+	// elem size: 配列型から要素サイズを決定（デフォルト4）
+	elemSize := 4
+	if t, ok := c.varTypes[n.Name]; ok {
+		switch t {
+		case "Array_float":
+			elemSize = 4
+		case "Array_int":
+			elemSize = 4
+		case "Array_bool":
+			elemSize = 4
+		}
+	}
+
+	// offset = idx * elemSize
+	idxL := "%" + c.fresh("idxl")
+	c.emit("%s%s =l extsw %s", indent, idxL, idxVal)
+	offset := "%" + c.fresh("off")
+	c.emit("%s%s =l mul %s, %d", indent, offset, idxL, elemSize)
+
+	// addr = base + offset
+	addr := "%" + c.fresh("iaddr")
+	c.emit("%s%s =l add %s, %s", indent, addr, base, offset)
+
+	// load value
+	result := "%" + c.fresh("elem")
+	c.emit("%s%s =w loadw %s", indent, result, addr)
+	return result
 }
+
+// ===== cast本実装 =====
+
+func (c *Codegen) genCast(n *ast.CastNode, indent string) string {
+	srcVal := c.evalToTemp(n.Value, "w", indent)
+	dstQt := c.qbeType(n.Type)
+	result := "%" + c.fresh("cast")
+
+	switch n.Type {
+	case "float":
+		// int → float
+		c.emit("%s%s =s swtof %s", indent, result, srcVal)
+	case "int":
+		// float → int
+		c.emit("%s%s =w stosi %s", indent, result, srcVal)
+	default:
+		c.emit("%s%s =%s copy %s", indent, result, dstQt, srcVal)
+	}
+	return result
+}
+
+// ===== Async/Await本実装 =====
+// QBEにはスレッドがないのでpthread呼び出しとして展開する
+
+func (c *Codegen) genAsync(n *ast.AsyncNode, indent string) {
+	// Async blockをヘルパー関数として切り出す
+	asyncFuncName := fmt.Sprintf("__async_task_%d", c.asyncCounter)
+	c.asyncCounter++
+
+	// 呼び出し元: pthread_createでasync関数を起動
+	tidVar := "%" + c.fresh("tid")
+	c.emit("%s%s =l alloc8 8", indent, tidVar)
+	c.emit("%scall $pthread_create(l %s, l 0, l $%s, l 0)", indent, tidVar, asyncFuncName)
+
+	// async関数本体を別関数として出力（後で追記）
+	savedBuf := c.buf
+	savedVars := c.vars
+	savedVarTypes := c.varTypes
+	savedParams := c.params
+
+	c.buf = strings.Builder{}
+	c.vars = make(map[string]string)
+	c.varTypes = make(map[string]string)
+	c.params = make(map[string]string)
+
+	c.emit("function l $%s(l %%_arg) {", asyncFuncName)
+	c.emit("@start")
+	for _, stmt := range n.Body {
+		c.genStmt(stmt, "    ")
+	}
+	c.emit("    ret 0")
+	c.emit("}")
+	c.emit("")
+
+	asyncBody := c.buf.String()
+
+	c.buf = savedBuf
+	c.vars = savedVars
+	c.varTypes = savedVarTypes
+	c.params = savedParams
+
+	// async関数をバッファの末尾に追加
+	c.emit("%s", asyncBody)
+}
+
+func (c *Codegen) genAwait(n *ast.AwaitNode, indent string) {
+	// pthread_joinでスレッドの完了を待つ
+	// tidはAwait[task]のtaskという変数から取得
+	tidPtr, ok := c.vars[n.Target]
+	if !ok {
+		c.emit("%s# Error: Await: %s は未宣言", indent, n.Target)
+		return
+	}
+	tid := "%" + c.fresh("tid")
+	c.emit("%s%s =l loadl %s", indent, tid, tidPtr)
+	c.emit("%scall $pthread_join(l %s, l 0)", indent, tid)
+}
+
+// ===== GPU本実装 =====
+// OpenCLのclEnqueueNDRangeKernelを想定した展開
+
+func (c *Codegen) genGPU(n *ast.GPUNode, indent string) {
+	gpuFuncName := fmt.Sprintf("__gpu_kernel_%d", c.asyncCounter)
+	c.asyncCounter++
+
+	c.emit("%s# GPU kernel: %s", indent, gpuFuncName)
+	// GPU kernelをCPU側からOpenCL経由で起動する想定
+	// 現時点ではCPUフォールバックとして展開
+	c.emit("%s# GPU fallback: CPU実行", indent)
+	for _, stmt := range n.Body {
+		c.genStmt(stmt, indent)
+	}
+	_ = gpuFuncName
+}
+
+// ===== Mem[risk{}]本実装 =====
+// unsafe操作ブロック：境界チェックなし、直接メモリアクセス許可
+
+func (c *Codegen) genRawMem(n *ast.RawMemNode, indent string) {
+	c.emit("%s# Mem[risk]: unsafe block begin", indent)
+	for _, stmt := range n.Body {
+		c.genStmt(stmt, indent)
+	}
+	c.emit("%s# Mem[risk]: unsafe block end", indent)
+}
+
+// ===== ユーティリティ =====
 
 func (c *Codegen) emitLoad(name, indent string) string {
 	if pv, ok := c.params[name]; ok {
 		return pv
 	}
-
 	if ptr, ok := c.vars[name]; ok {
+		qt := "w"
+		if t, ok := c.varTypes[name]; ok {
+			qt = c.qbeType(t)
+		}
 		tmp := "%" + c.fresh("t")
-		c.emit("%s%s =w loadw %s", indent, tmp, ptr)
+		c.emitLoadInstr(qt, tmp, ptr, indent)
 		return tmp
 	}
 	return name
+}
+
+func (c *Codegen) emitLoadInstr(qt, dst, src, indent string) {
+	switch qt {
+	case "l":
+		c.emit("%s%s =l loadl %s", indent, dst, src)
+	case "s":
+		c.emit("%s%s =s loads %s", indent, dst, src)
+	default:
+		c.emit("%s%s =w loadw %s", indent, dst, src)
+	}
+}
+
+func (c *Codegen) emitStore(qt, val, ptr, indent string) {
+	switch qt {
+	case "l":
+		c.emit("%sstorel %s, %s", indent, val, ptr)
+	case "s":
+		c.emit("%sstores %s, %s", indent, val, ptr)
+	default:
+		c.emit("%sstorew %s, %s", indent, val, ptr)
+	}
 }
 
 func (c *Codegen) evalToTemp(node ast.Node, qt string, indent string) string {
@@ -254,8 +471,12 @@ func (c *Codegen) evalToTemp(node ast.Node, qt string, indent string) string {
 			return pv
 		}
 		if ptr, ok := c.vars[n.Value]; ok {
+			vqt := qt
+			if t, ok := c.varTypes[n.Value]; ok {
+				vqt = c.qbeType(t)
+			}
 			tmp := "%" + c.fresh("t")
-			c.emit("%s%s =w loadw %s", indent, tmp, ptr)
+			c.emitLoadInstr(vqt, tmp, ptr, indent)
 			return tmp
 		}
 		return n.Value
@@ -263,6 +484,14 @@ func (c *Codegen) evalToTemp(node ast.Node, qt string, indent string) string {
 		return c.genExprNode(n, qt, indent)
 	case *ast.CallNode:
 		return c.genCallExpr(n, qt, indent)
+	case *ast.AddressNode:
+		return c.evalAddress(n, indent)
+	case *ast.DerefNode:
+		return c.genDeref(n, indent)
+	case *ast.IndexNode:
+		return c.genIndex(n, indent)
+	case *ast.CastNode:
+		return c.genCast(n, indent)
 	}
 	return "0"
 }
@@ -282,7 +511,6 @@ func (c *Codegen) genExprNode(expr *ast.ExprNode, qt string, indent string) stri
 	return result
 }
 
-// If[check{lesseq(hp,0)}, True[...], False[...]]
 func (c *Codegen) genIf(n *ast.IfNode, indent string) {
 	trueLabel := "@" + c.fresh("true")
 	falseLabel := "@" + c.fresh("false")
@@ -356,7 +584,6 @@ func (c *Codegen) genLoop(n *ast.LoopNode, indent string) {
 			iNew := "%" + c.fresh("step")
 			c.emit("%s%s =w add %s, %d", indent+"    ", iNew, iCur, n.Step)
 			c.emit("%sstorew %s, %s", indent+"    ", iNew, c.vars[init.Name])
-
 			c.emit("%sjmp %s", indent+"    ", loopLabel)
 		}
 	} else {
@@ -436,7 +663,6 @@ func (c *Codegen) genError(n *ast.ErrorNode, indent string) {
 	c.emit("%s", endLabel)
 }
 
-// QBE比較命令（符号付き整数）※新キーワード対応
 func (c *Codegen) qbeCompare(op string) string {
 	switch op {
 	case "equal":
@@ -488,4 +714,11 @@ func (c *Codegen) qbeType(t string) string {
 		return qt
 	}
 	return "w"
+}
+
+func (c *Codegen) typeSize(t string) int {
+	if s, ok := typeSizeMap[t]; ok {
+		return s
+	}
+	return 4
 }
