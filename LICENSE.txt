@@ -1,4 +1,4 @@
-Copyright (c) 2026/7/9/20:21 奇曲宮夢(ききょくみゆ)
+Copyright (c) 2026 奇曲宮夢(ききょくみゆ)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
