@@ -263,10 +263,18 @@ func (c *Codegen) evalAddress(n *ast.AddressNode, indent string) string {
 
 // deref{ptr} → ptrが指す値をロード
 func (c *Codegen) genDeref(n *ast.DerefNode, indent string) string {
-	// ptrレジスタを取得
-	ptrVal := c.emitLoad(n.Name, indent)
+	// まず変数のスタックptrアドレスを取得
+	ptr, ok := c.vars[n.Name]
+	if !ok {
+		c.emit("%s# Error: deref: %s は未宣言", indent, n.Name)
+		return "0"
+	}
+	// ptrからアドレス値をload（long）
+	addr := "%" + c.fresh("daddr")
+	c.emit("%s%s =l loadl %s", indent, addr, ptr)
+	// そのアドレスが指す値をload（word）
 	result := "%" + c.fresh("deref")
-	c.emit("%s%s =w loadw %s", indent, result, ptrVal)
+	c.emit("%s%s =w loadw %s", indent, result, addr)
 	return result
 }
 

@@ -115,6 +115,10 @@ func (c *CGen) genFunc(fn *ast.FuncNode) {
 func (c *CGen) genFuncAs(fn *ast.FuncNode, name string) {
 	retType := "long"
 
+	// 関数スコープをリセット（前の関数の変数が残らないように）
+	savedVars := c.vars
+	c.vars = make(map[string]string)
+
 	var params []string
 	for _, p := range fn.Params {
 		ct := c.cType(p.Type)
@@ -135,6 +139,7 @@ func (c *CGen) genFuncAs(fn *ast.FuncNode, name string) {
 	}
 	c.emit("}")
 	c.emit("")
+	c.vars = savedVars
 }
 
 func (c *CGen) genStmt(node ast.Node, indent string) {

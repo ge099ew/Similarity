@@ -593,6 +593,14 @@ func (p *Parser) parseLiteral() ast.Node {
 		return p.parseExpr()
 	case lexer.TOKEN_CALL:
 		return p.parseCall()
+	case lexer.TOKEN_ADDR:
+		return p.parseAddress()
+	case lexer.TOKEN_DEREF:
+		return p.parseDeref()
+	case lexer.TOKEN_CAST:
+		return p.parseCast()
+	case lexer.TOKEN_INDEX:
+		return p.parseIndex()
 	}
 	tok := p.cur()
 	p.advance()

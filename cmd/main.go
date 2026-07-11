@@ -8,6 +8,7 @@ import (
 	"similarity/codegen"
 	"similarity/lexer"
 	"similarity/parser"
+	"similarity/typecheck"
 	"strings"
 )
 
@@ -34,10 +35,24 @@ func compile(input, baseName string, irOnly bool) {
 		}
 	}
 
-	// ② QBE IR生成（関数を sim_main にリネーム）
+	// ② コンパイル時型チェック（null安全・型整合性・オーバーフロー）
+	checker := typecheck.New()
+	checkErrors := checker.Check(prog)
+	if len(checkErrors) > 0 {
+		fmt.Println("=== Type Check Errors ===")
+		for _, e := range checkErrors {
+			fmt.Println(e)
+		}
+		// エラーがあればコンパイルを中断
+		fmt.Println("コンパイルを中断しました。型エラーを修正してください。")
+		return
+	}
+
+	// ③ QBE IR生成（関数を sim_main にリネーム）
 	ir := codegen.New().Generate(prog)
 	// export function w $main → export function w $sim_main
-	ir = strings.ReplaceAll(ir, "function w $main(", "function w $sim_main(")
+	ir = strings.ReplaceAll(ir, "function w $main(", "export function w $sim_main(")
+	ir = strings.ReplaceAll(ir, "export function w $sim_main(", "export function w $sim_main(")
 	ir = strings.ReplaceAll(ir, "call $main(", "call $sim_main(")
 
 	ssaFile := baseName + ".ssa"
@@ -49,7 +64,7 @@ func compile(input, baseName string, irOnly bool) {
 		return
 	}
 
-	// ③ タイマー付きCラッパー生成
+	// ④ タイマー付きCラッパー生成
 	wrapperCode := `#include <stdio.h>
 #include <time.h>
 
@@ -69,7 +84,7 @@ int main() {
 	wrapperFile := baseName + "_wrapper.c"
 	os.WriteFile(wrapperFile, []byte(wrapperCode), 0644)
 
-	// ④ qbeが使えるか確認
+	// ⑤ qbeが使えるか確認
 	_, qbeErr := exec.LookPath("qbe")
 	useQBE := qbeErr == nil
 
