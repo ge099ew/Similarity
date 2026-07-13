@@ -147,6 +147,8 @@ func (p *Parser) parseStatement() ast.Node {
 		return p.parseCall()
 	case lexer.TOKEN_ASYNC:
 		return p.parseAsync()
+	case lexer.TOKEN_SHARE:
+		return p.parseShare()
 	case lexer.TOKEN_AWAIT:
 		return p.parseAwait()
 	case lexer.TOKEN_GPU:
@@ -545,12 +547,12 @@ func (p *Parser) parseCall() *ast.CallNode {
 // return{value}
 func (p *Parser) parseReturn() *ast.ReturnNode {
 	p.advance() // skip return
-	p.expect(lexer.TOKEN_LBRACE)
+	p.expect(lexer.TOKEN_LPAREN)
 	node := p.arena.Add(&ast.ReturnNode{}).(*ast.ReturnNode)
-	if p.cur().Type != lexer.TOKEN_RBRACE {
+	if p.cur().Type != lexer.TOKEN_RPAREN {
 		node.Value = p.parseLiteral()
 	}
-	p.expect(lexer.TOKEN_RBRACE)
+	p.expect(lexer.TOKEN_RPAREN)
 	return node
 }
 
@@ -703,11 +705,59 @@ func (p *Parser) parseMem() *ast.RawMemNode {
 	p.expect(lexer.TOKEN_LBRACKET)
 	p.advance() // skip risk/Raw
 	p.expect(lexer.TOKEN_LBRACE)
+	lineStart := p.cur().Line
 	node := p.arena.Add(&ast.RawMemNode{}).(*ast.RawMemNode)
+	node.LineStart = lineStart
 	node.Body = p.parseBlock()
+	node.LineEnd = p.cur().Line
+	// ブロック内のunsafe操作を収集
+	node.Ops = collectRiskOps(node.Body)
 	p.expect(lexer.TOKEN_RBRACE)
 	p.expect(lexer.TOKEN_RBRACKET)
 	return node
+}
+
+// riskブロック内のunsafe操作を収集
+func collectRiskOps(body []ast.Node) []string {
+	opsMap := map[string]bool{}
+	var walk func(n ast.Node)
+	walk = func(n ast.Node) {
+		if n == nil {
+			return
+		}
+		switch v := n.(type) {
+		case *ast.DerefNode:
+			opsMap["deref"] = true
+		case *ast.AddressNode:
+			opsMap["addr"] = true
+		case *ast.VariableNode:
+			walk(v.Value)
+		case *ast.MutationNode:
+			walk(v.Value)
+		case *ast.RawMemNode:
+			for _, s := range v.Body {
+				walk(s)
+			}
+		}
+	}
+	for _, s := range body {
+		walk(s)
+	}
+	var ops []string
+	for op := range opsMap {
+		ops = append(ops, op)
+	}
+	return ops
+}
+
+// share(x) → Async間で共有する変数を明示
+func (p *Parser) parseShare() *ast.ShareNode {
+	p.advance() // skip share
+	p.expect(lexer.TOKEN_LPAREN)
+	name := p.cur().Literal
+	p.advance()
+	p.expect(lexer.TOKEN_RPAREN)
+	return &ast.ShareNode{Name: name}
 }
 
 // break{}

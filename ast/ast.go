@@ -158,6 +158,13 @@ type AsyncNode struct {
 
 func (a *AsyncNode) TokenLiteral() string { return "Async" }
 
+// share(x) → Async間で共有する変数を明示
+type ShareNode struct {
+	Name string
+}
+
+func (s *ShareNode) TokenLiteral() string { return "share" }
+
 // Await[task]
 type AwaitNode struct {
 	Target string
@@ -175,7 +182,10 @@ func (g *GPUNode) TokenLiteral() string { return "GPU" }
 // メモリ・ポインタ
 // Mem[risk{...}] / Mem[Raw{...}]
 type RawMemNode struct {
-	Body []Node
+	Body      []Node
+	LineStart int
+	LineEnd   int
+	Ops       []string // 使用されてるunsafe操作（deref, addr等）
 }
 
 func (r *RawMemNode) TokenLiteral() string { return "Mem" }

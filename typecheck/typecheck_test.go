@@ -136,3 +136,58 @@ Function[main{
 		t.Errorf("int→float castは正常なのにエラーが出た: %v", errs)
 	}
 }
+
+// ===== share安全性チェック =====
+
+func TestShareUndeclared(t *testing.T) {
+	src := `
+Function[main{
+  receive{},
+  Async[{
+    share(x),
+    Variable[let{int(x:10)}]
+  }],
+  return(0)
+}]
+`
+	errs := check(src)
+	if !hasErrorCode(errs, "TC5001") {
+		t.Errorf("未宣言変数のshareでTC5001が出るべき: %v", errs)
+	}
+}
+
+func TestShareWithoutDeclaration_Mutation(t *testing.T) {
+	src := `
+Function[main{
+  receive{},
+  Variable[let{int(x:10)}],
+  Async[{
+    Mutation[variable{int(x:30)}]
+  }],
+  return(0)
+}]
+`
+	errs := check(src)
+	if !hasErrorCode(errs, "TC5002") {
+		t.Errorf("share宣言なしのAsync内MutationでTC5002が出るべき: %v", errs)
+	}
+}
+
+func TestShareValid(t *testing.T) {
+	src := `
+Function[main{
+  receive{},
+  Variable[let{int(x:10)}],
+  Async[{
+    share(x),
+    Mutation[variable{int(x:30)}]
+  }],
+  return(0)
+}]
+`
+	errs := check(src)
+	// TC5001/TC5002は出ないはず
+	if hasErrorCode(errs, "TC5001") || hasErrorCode(errs, "TC5002") {
+		t.Errorf("正しいshare宣言でエラーが出た: %v", errs)
+	}
+}

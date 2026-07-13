@@ -176,6 +176,11 @@ func (c *Codegen) genStmt(node ast.Node, indent string) {
 	case *ast.FuncNode:
 		c.genFunc(n)
 
+	// ===== share =====
+	case *ast.ShareNode:
+		// share宣言はtypecheckで検証済み、codegenでは何もしない（注釈のみ）
+		c.emit("%s# share(%s) - Async間共有変数", indent, n.Name)
+
 	// ===== Async/Await =====
 	case *ast.AsyncNode:
 		c.genAsync(n, indent)

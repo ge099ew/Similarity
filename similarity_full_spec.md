@@ -1,6 +1,6 @@
 # Similarity 言語仕様書 完全版
 
-> 作成中のオリジナル言語。C++の「魔の領域」を安全・高速に置き換えることを目標とする。
+> C/C++を玉座から引きずり降ろすために設計されたシステムプログラミング言語。
 
 ---
 
@@ -8,11 +8,12 @@
 
 | 項目 | 内容 |
 |------|------|
-| 目的 | C++の「魔の領域」を安全に置き換える |
+| 目的 | C/C++依存ゼロのシステムプログラミング言語 |
 | 拡張子 | `.iia` |
-| コンパイラ | Go製（予定） |
-| バックエンド | QBEが有力候補（LLVM不使用） |
-| 出力 | ネイティブバイナリ（C++トランスパイルではない） |
+| コンパイラ | Go製（動作中） |
+| バックエンド | CAI（開発中） / QBE（現在使用中） |
+| 出力 | ネイティブバイナリ（C/C++トランスパイルではない） |
+| マルチOS | Cosmopolitan Libc（APE形式）予定 |
 
 ---
 
@@ -23,14 +24,44 @@
          ↓
       .iia（テキストAST・低レイヤー）
          ↓
-    QBEバックエンド
+    typecheck（コンパイル時安全性チェック）
+         ↓
+    CAI IR（開発中） / QBE IR（現在）
          ↓
     ネイティブバイナリ
 ```
 
 - `.iia` はコンパイラが「推測しなくていい」完全明示的な中間表現
 - 高級版は `.iia` へ1対1で変換される糖衣構文
-- `.iia` が綺麗なIRを出力するため、LLVMのような重い最適化パスが少なくて済む
+- CAIはQBEを完全に置き換えるオリジナルIR（C/C++依存ゼロ）
+
+---
+
+## サポートシステム
+
+### Cell（.cel）
+パッケージ管理ファイル。依存関係・バージョン情報を記述。
+
+### Echo（.eho）
+開発者サポートシステム。コンパイル時にriskブロックを検出してレポートを生成。
+
+**コンパイル中（CLI警告）:**
+```
+⚠️  risk block detected → test_all.eho を確認してください。
+```
+
+**コンパイル後（.ehoレポートファイル）:**
+```
+Similarity Echo Report
+Generated : 2026-07-13 18:58:25
+Source    : test_all.iia
+Risk Blocks: 1
+----------------------------------------
+
+[1] test_all.iia : line 20-21
+    → deref use
+    メモリ安全性は保証されません。
+```
 
 ---
 
@@ -50,31 +81,18 @@ Func_pub     // 公開関数
 
 ## Explanation システム ✅ 決定
 
-全ファイルの先頭に記述。コンパイラ・QBEに「このファイルが何をするか」を最初から伝えることで、推測なしに最適化方針を決定できる。
+全ファイルの先頭に記述。コンパイラに「このファイルが何をするか」を最初から伝える。
 
 ```iia
-Explanation[Application{Game(type:RPG, name:Minecraft)}]  // ゲームアプリ
-Explanation[Bridge{Cxx(lib:"SDL2")}]                      // C++橋渡し専用
-Explanation[System{HFT}]                                   // 極限低レイテンシ
-Explanation[Module{Math}]                                  // モジュール
+Explanation[Application{Game(type:RPG, name:Minecraft)}]
+Explanation[Bridge{Cxx(lib:"SDL2")}]
+Explanation[System{HFT}]
+Explanation[Module{Math}]
 ```
-
-### 解決できる問題
-
-| 問題 | 状態 | 内容 |
-|------|------|------|
-| コンパイル速度 | ✅ 成立 | QBEが最初から最適化方針を選べる |
-| C++ブリッジ宣言 | ✅ 成立 | Bridgeファイルとして型変換を自動処理 |
-| 課題B（HFT最適化） | 🔶 方向性確定 | `System{HFT}`で自動挿入コードを無効化できる可能性 |
-| 型の互換性 | 🔶 方向性確定 | Bridgeファイル内で型変換ルールを適用できる可能性 |
-
-> 「コンパイラが推測しない」というSimilarityの設計哲学がファイルレベルにも貫かれている。
 
 ---
 
-
-
-### 変数
+## 変数
 
 ```iia
 Variable[let{int(x:10)}]                        // 変更可・整数x = 10
@@ -83,37 +101,28 @@ Variable[struct{User, String(name), int(age)}]  // 構造体定義
 Variable[let{User(name:"John", age:25)}]        // 構造体インスタンス
 ```
 
-| | 読む | 書く | 引っ越し（Move） |
+| | 読む | 書く | Move |
 |---|---|---|---|
 | `let` | ○ | ○ | ○ |
 | `unclet` | スコープ内のみ | ✗ | ✗ |
 
 ---
 
-### 型システム
+## 型システム
 
 ```iia
-int(x)        // スタック配置
-Box_int(x)    // ヒープ配置
+int(x)           // スタック配置
+Box_int(x)       // ヒープ配置
 float(x)
 String(x)
+Array_int(x)     // int配列
+Array_float(x)   // float配列
+Array_bool(x)    // bool配列
 ```
 
 ---
 
-### unc 修飾子
-
-`unc` = 言語全体の「不変の印」
-
-```iia
-unclet               // 不変な変数
-Func[unc{...}]       // 副作用なしの純粋関数（将来）
-Mem[unc{...}]        // 読み取り専用メモリ（将来）
-```
-
----
-
-### 演算子
+## 演算子
 
 ```iia
 +{int(a, b)}                    // a + b
@@ -122,21 +131,22 @@ Mem[unc{...}]        // 読み取り専用メモリ（将来）
 
 **比較演算子**
 ```iia
-eq(a:10, b:5)    // a == 10 かつ b == 5
-le(hp, 0)        // hp <= 0
-lt(i, 10)        // i < 10
+equal(a:b)      // a == b
+notequal(a:b)   // a != b
+less(a:b)       // a < b
+lesseq(a:b)     // a <= b
+greater(a:b)    // a > b
+greatereq(a:b)  // a >= b
 ```
-
-コロン（`:`）は「この変数の値が〜」を意味する。
 
 ---
 
-### 制御フロー
+## 制御フロー
 
 **If文**
 ```iia
 If[
-  check{le(hp, 0)},
+  check{less(hp:0)},
   True[処理],
   False[処理]
 ]
@@ -153,33 +163,24 @@ Loop[
 **ループ（条件付き）**
 ```iia
 Loop[
-  for{int(i:0), lt(i, 10), step{1}},
+  for{int(i:0), less(i:10), step{1}},
   Body[処理]
 ]
-// step{2} で+2、step{-1} で逆順も可能
 ```
 
 ---
 
-### 関数
+## 関数
 
 ```iia
-// 定義
-Func[計算{
+Function[計算{
   receive{int(x), String(name)},
   処理,
-  return{戻り値}
-}]
-
-// 戻り値なし
-Func[計算{
-  receive{int(x)},
-  処理,
-  return{}
+  return(戻り値)
 }]
 
 // 公開関数
-Func_pub[計算{...}]
+Function_pub[計算{...}]
 
 // 呼び出し
 call{計算(引数)}
@@ -187,68 +188,97 @@ call{計算(引数)}
 
 ---
 
-### メモリ管理
+## ポインタ
 
-- **コッカ（閉じ括弧）で自動解放** — GCなし、借用チェッカーなし
-- **引っ越し（Move）** — `let` 変数はスコープ外へ移動できる
-- **`unclet` は引っ越し不可** — スコープ内で確実に解放
-- **危険領域の隔離** — `Mem[Raw{...}]` で手動管理を明示
+```iia
+Variable[let{int(x:10)}]
+Variable[let{int(ptr:addr{x})}]    // xのアドレスを取得
+
+Mem[risk{
+  Variable[let{int(val:deref{ptr})}]  // ptrが指す値を読む
+}]
+```
 
 ---
 
-### エラーハンドリング
+## 配列アクセス
 
-**通常のエラー**
+```iia
+Variable[let{Array_int(arr:0)}]
+Variable[let{int(val:index{arr(i)})}]  // arr[i]
+```
+
+---
+
+## cast
+
+```iia
+Variable[let{int(x:10)}]
+Variable[let{float(y:cast{float(x)})}]  // int → float
+Variable[let{int(z:cast{int(y)})}]      // float → int
+```
+
+---
+
+## メモリ管理
+
+- **閉じ括弧で自動解放** — GCなし
+- **危険領域の隔離** — `Mem[risk{...}]` で手動管理を明示（Echoが自動検出・レポート）
+
+---
+
+## 安全性システム（コンパイル時）
+
+typecheckパッケージがコンパイル時に以下を検出・中断する。
+
+| エラーコード | 内容 |
+|---|---|
+| TC1001 | null許容型のnullチェックなしアクセス |
+| TC2001 | 型ミスマッチ（代入） |
+| TC2002 | 未宣言変数へのMutation |
+| TC2003 | Mutation型ミスマッチ |
+| TC2004 | 比較型ミスマッチ |
+| TC2005 | 演算型ミスマッチ |
+| TC2006 | cast元が数値型でない |
+| TC2007 | cast先がサポート外 |
+| TC2008 | 未宣言配列へのindex |
+| TC2009 | 非配列型へのindex |
+| TC2010 | 配列インデックスがint以外 |
+| TC3001 | Awaitの対象が未宣言 |
+| TC3002 | risk{}外でのderef使用 |
+| TC4001 | 整数オーバーフロー（32bit範囲超え） |
+| TC5001 | share: 未宣言変数 |
+| TC5002 | Async内でshare宣言なしにMutation |
+
+---
+
+## 非同期・並行処理
+
+```iia
+Variable[let{int(x:10)}]
+
+Async[{
+  share(x),                          // x を共有変数として明示（必須）
+  Mutation[variable{int(x:30)}]      // share宣言があれば変更可
+}]
+
+Await[task]                          // スレッドの完了を待つ
+```
+
+**share宣言なしにAsync内でMutationするとTC5002エラー。**
+
+---
+
+## エラーハンドリング
+
 ```iia
 Error[
   try{処理},
   Ok[処理],
   Err[type{FileNotFound}, msg{"config.txt が見つかりません"}]
 ]
-```
 
-**エラーを呼び出し元に投げる**
-```iia
-Error[
-  try{call{open_file()}},
-  Ok[処理],
-  Err[pass{}]
-]
-```
-
-**回復不能エラー**
-```iia
 Fatal[type{OutOfMemory}, msg{"回復不能"}]
-```
-
-**カスタムエラー型**
-```iia
-Error[def{UserNotFound}]
-Error[def{InvalidInput}]
-```
-
-**組み込みエラー型**
-
-| 型名 | 意味 |
-|------|------|
-| `FileNotFound` | ファイルが見つからない |
-| `OutOfMemory` | メモリ不足 |
-| `NullAccess` | null参照 |
-| `OutOfBounds` | 配列の範囲外アクセス |
-| `DivisionByZero` | ゼロ除算 |
-
----
-
-### エラーメッセージフォーマット
-
-```
-Error: {行番号} line, {問題のコード}({簡潔な説明}). errornumber{番号}
-```
-
-例：
-```
-Error: 2 line, String(name)(ダブルクォーテーションがない). errornumber10010
-Error: 5 line, Variable[let{int(x:10)}](型が一致しない). errornumber20010
 ```
 
 **エラーナンバー体系**
@@ -263,150 +293,53 @@ Error: 5 line, Variable[let{int(x:10)}](型が一致しない). errornumber20010
 
 ---
 
-### モジュールシステム
+## モジュールシステム
 
 ```iia
-Import[discord{}]              // ライブラリ全部読み込む
-Import[discord{token}]         // tokenだけ
-Import[discord{token, api}]    // 複数指定
-Import[myfile.iia{}]           // 自分のファイル
+Import[discord{}]
+Import[discord{token, api}]
+Import[myfile.iia{}]
 ```
 
-**公開・非公開**
+---
+
+## C/C++ interop
+
 ```iia
-Func_pub[計算{...}]            // 公開（他ファイルから呼べる）
-Func[計算{...}]                // 非公開（デフォルト）
-Variable_pub[let{int(x:10)}]   // 公開変数
+Extern[C{
+  lib{"SDL2"},
+  draw_sprite{receive{int(x), int(y)}, return{}}
+}]
+
+call{draw_sprite(10, 20)}
 ```
 
 ---
 
-## △ 未設計
+## CAI（Common Assembly Instructions / 共通アセンブリ命令）
 
-- **C++ライブラリとのinterop** ✅ 決定
+QBEを完全に置き換えるオリジナルIR。
 
-  C ABIを橋渡しにする（速度のオーバーヘッドなし）。
-
-  ```iia
-  // 宣言
-  Extern[C{
-    lib{"SDL2"},
-    draw_sprite{receive{int(x), int(y)}, return{}}
-  }]
-
-  // 複数ライブラリ
-  Extern[C{
-    lib{"SDL2", "SDL2_image"},
-    draw_sprite{receive{int(x), int(y)}, return{}}
-  }]
-
-  // ライブラリ不明
-  Extern[C{
-    lib{notcle},
-    printf{receive{String(fmt)}, return{int}}
-  }]
-
-  // 呼び出し（通常関数と同じ）
-  call{draw_sprite(10, 20)}
-  ```
-
-  ※ `notcle` = not clear（ライブラリ名が不明な場合）
-  ※ 型の互換性（C++複合型との対応）は別途設計予定
-- **高級版の文法** △ 仮決定
-
-  省略ルール：外側`[]`省略可・`()`省略可・`{}`は常に残す・カテゴリ名短縮（`Variable`→`Var`）
-
-  セミコロン＋インデント方式（仮）：
-  ```
-  If le{hp, 0};
-      True[処理]
-      False[処理]
-
-  Func 計算{receive int x};
-      処理
-      return int x
-  ```
-  `;` が「以下にブロックが来る」合図。`.iia`の`[]`がインデントに置き換わるイメージ。
-- **非同期・GPU処理** — 安全な設計が必要
-
----
-
-## ✗ 未解決の壁
-
-### 課題A：分岐のゾンビ検知
-if文のどちらかのブランチだけでMoveが発生した場合の検知。
-
-**有力な解決策（未確定）：**
-`True[]` / `False[]` の構造が明示的なので、
-「どちらかのブランチでMoveしたなら、全ブランチでMoveかDropを必須にする」
-というルールを言語仕様として課せば、重い解析なしで解決できる可能性がある。
-
-### 課題B：極限の最適化
-HFT等で自動挿入コードを完全無効化する手段。未解決。
-
-### 課題C：認知負荷
-`int` vs `Box_int` の意識がC++と同じ重さになる問題。未解決。
-
----
-
-## メリット・デメリット
-
-### メリット
-
-| 項目 | 内容 |
-|------|------|
-| 問題設定が鋭い | C++が選ばれる「魔の領域」を正確に狙っている |
-| .iia の設計 | コンパイラが推測しない → 高速ビルドの土台 |
-| 型レベルでスタック/ヒープ明示 | Rustより明快、隠れたコストがない |
-| LLVMを使わない | QBEで軽量に、ビルド速度で差別化できる |
-| 綺麗なIRを出力 | 最適化パスが少なくて済む可能性がある |
-| True/Falseの明示的分岐 | 課題Aの解決策に直結している |
-| unc修飾子 | 言語全体で不変性を一貫して表現できる |
-| エラーナンバー体系 | 調べるだけで原因・直し方がわかる設計 |
-
-### デメリット
-
-| 項目 | 内容 |
-|------|------|
-| 競合が多い | Carbon、Zig、Valeなども同じ領域を狙っている |
-| C++interopが未設計 | 最大の差別化要因がまだ実現していない |
-| 高級版が未設計 | 実際に人間が書く文法がほぼ決まっていない |
-| 課題A〜Cが未解決 | 安全性の核心部分にまだ穴がある |
-| 実装コストが大きい | 10年単位のプロジェクト |
-
----
-
-## 実際にC++を置き換えられるのか？
-
-### 正直な評価
-
-**短期的には：難しい。**
-C++interopが未設計で、高級版の文法も決まっていない。
-今の段階では「設計中の言語」であり、実用にはほど遠い。
-
-**長期的には：可能性がある。**
-ただし条件がある：
-
-1. **C++interopを解決できれば**
-   既存のUnrealEngine・CUDAなどのC++資産と地続きになれる。
-   これが実現した瞬間に、Similarityの存在意義が一気に高まる。
-
-2. **課題Aを言語仕様で解決できれば**
-   「借用チェッカーなしで安全」という唯一無二の立ち位置になれる。
-   Rustより覚えやすく、C++より安全という層を取れる。
-
-3. **QBEで本当に速いビルドが実現できれば**
-   「Rustより速く書けて、C++と同じ速度で動く」は強力な差別化になる。
-
-### 現実的なロードマップ
-
+**パイプライン:**
 ```
-今       → 仕様を固める（← 今ここ）
-〜1年    → Goで動くプロトタイプを作る
-〜3年    → QBEバックエンドで実際に動くコンパイラ
-〜5年    → C++interopの実現
-〜10年   → 自己ホスト・実用レベル
+.iia → Go(本体) → CAI(テキスト) → CAI変換器(APE形式) → バイナリ
 ```
+
+**命令セット:**
+```
+func <name>          // 関数定義
+alloc <name> <size>  // スタック確保
+store <name> <value> // 値をストア
+load  <name>         // 値を読む
+add/sub/mul/div      // 演算
+cmp / jlt/jle/jeq/jne/jgt/jge/jmp  // 比較・分岐
+label <name>         // ラベル
+call <name> <args>   // 関数呼び出し
+extern <name>        // 外部関数
+ret <value>          // return
+```
+
+**フォーマット:** Phase1はテキスト形式（デバッグ用）→ Phase2でバイナリ形式に移行
 
 ---
 
@@ -415,7 +348,30 @@ C++interopが未設計で、高級版の文法も決まっていない。
 1. **コンパイラは推測しない** — 全て明示
 2. **スタック/ヒープは型で明示**
 3. **unc は言語全体の不変の印**
-4. **マトリョーシカ構造がライフタイムを決める**
-5. **LLVMを使わない、QBEで軽量に**
-6. **C++と地続きだが、C++に変換はしない**
+4. **危険操作はMem[risk{}]で明示、Echoが自動レポート**
+5. **C/C++依存ゼロ（CAI完成後）**
+6. **Async間の共有変数はshare()で明示**
 7. **アンダースコアが修飾子**（Box_int、Func_pub）
+
+---
+
+## 実装状況
+
+| 機能 | 状態 |
+|---|---|
+| lexer/parser | ✅ 動作中 |
+| codegen（QBE） | ✅ 動作中 |
+| ポインタ（addr/deref） | ✅ 実装済み |
+| 配列アクセス（index） | ✅ 実装済み |
+| cast（int↔float） | ✅ 実装済み |
+| Mem[risk{}] | ✅ 実装済み |
+| Async/Await | ✅ 実装済み（pthread） |
+| typecheck | ✅ 実装済み |
+| share() | ✅ 実装済み |
+| Echo（.eho） | ✅ 実装済み |
+| CAI IR | 🔶 設計確定、実装未着手 |
+| Cell（.cel） | 🔶 設計中 |
+| 高級版構文 | 🔶 設計中 |
+| 借用チェッカー代替 | ✅ share()で部分実装 |
+| GPU | 🔶 CPUフォールバック中 |
+| 自己ホスト | 📅 長期目標 |

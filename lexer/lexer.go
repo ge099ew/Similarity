@@ -17,6 +17,7 @@ const (
 	TOKEN_EXPLANATION  TokenType = "EXPLANATION"
 	TOKEN_ASYNC        TokenType = "ASYNC"
 	TOKEN_AWAIT        TokenType = "AWAIT"
+	TOKEN_SHARE        TokenType = "SHARE"
 	TOKEN_GPU          TokenType = "GPU"
 	TOKEN_MEM          TokenType = "MEM"
 	TOKEN_LE           TokenType = "LE"
@@ -95,6 +96,7 @@ var keywords = map[string]TokenType{
 	"Explanation":     TOKEN_EXPLANATION,
 	"Async":           TOKEN_ASYNC,
 	"Await":           TOKEN_AWAIT,
+	"share":           TOKEN_SHARE,
 	"GPU":             TOKEN_GPU,
 	"Mem":             TOKEN_MEM,
 	"let":             TOKEN_LET,

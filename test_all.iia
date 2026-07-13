@@ -3,14 +3,14 @@ Explanation[Application{Test(type:AllFeatures)}]
 Function[test_pointer{
   receive{},
   Variable[let{int(x:42)}],
-  return{x}
+  return(x)
 }]
 
 Function[test_cast{
   receive{},
   Variable[let{int(x:10)}],
   Variable[let{float(y:cast{float(x)})}],
-  return{0}
+  return(0)
 }]
 
 Function[test_risk{
@@ -19,13 +19,13 @@ Function[test_risk{
   Mem[risk{
     Variable[let{int(val:deref{x})}]
   }],
-  return{0}
+  return(0)
 }]
 
 Function[test_overflow_check{
   receive{},
   Variable[let{int(x:2147483647)}],
-  return{x}
+  return(x)
 }]
 
 Function[main{
@@ -34,5 +34,5 @@ Function[main{
   Variable[let{int(b:call{test_cast()})}],
   Variable[let{int(c:call{test_risk()})}],
   Variable[let{int(d:call{test_overflow_check()})}],
-  return{a}
+  return(a)
 }]

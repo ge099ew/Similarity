@@ -25,16 +25,16 @@ func TestExplanationComment(t *testing.T) {
 func TestVariableIR(t *testing.T) {
 	ir := generateIR(`
 Explanation[Application{App(type:test)}]
-Func[main{
+Function[main{
   receive{},
   Variable[let{int(x:10)}],
-  return{}
+  return()
 }]
 `)
 	t.Logf("生成されたIR:\n%s", ir)
 	// メモリベース: alloc4 + storew
-	if !strings.Contains(ir, "alloc4") {
-		t.Errorf("alloc4がない（メモリベース変数）:\n%s", ir)
+	if !strings.Contains(ir, "alloc4 4") {
+		t.Errorf("alloc4 4がない（メモリベース変数）:\n%s", ir)
 	}
 	if !strings.Contains(ir, "storew 10") {
 		t.Errorf("storew 10がない:\n%s", ir)
@@ -43,10 +43,10 @@ Func[main{
 
 func TestFuncIR(t *testing.T) {
 	ir := generateIR(`
-Func[main{
+Function[main{
   receive{},
   Variable[let{int(hp:100)}],
-  return{hp}
+  return(hp)
 }]
 `)
 	t.Logf("生成されたIR:\n%s", ir)

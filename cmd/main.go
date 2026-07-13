@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"similarity/cgen"
 	"similarity/codegen"
+	"similarity/echo"
 	"similarity/lexer"
 	"similarity/parser"
 	"similarity/typecheck"
@@ -48,7 +49,12 @@ func compile(input, baseName string, irOnly bool) {
 		return
 	}
 
-	// ③ QBE IR生成（関数を sim_main にリネーム）
+	// ③ Echo: riskブロックのスキャン・警告
+	ec := echo.New(baseName)
+	ec.Scan(prog)
+	ec.WarnInline()
+
+	// ④ QBE IR生成（関数を sim_main にリネーム）
 	ir := codegen.New().Generate(prog)
 	// export function w $main → export function w $sim_main
 	ir = strings.ReplaceAll(ir, "function w $main(", "export function w $sim_main(")
@@ -133,6 +139,9 @@ int main() {
 	}
 
 	fmt.Printf("Binary  → %s ✅\n", binFile)
+
+	// Echo: コンパイル後レポート
+	ec.Report()
 }
 
 func main() {

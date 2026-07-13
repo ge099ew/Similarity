@@ -171,8 +171,14 @@ func (c *Checker) checkNode(node ast.Node) TypeInfo {
 	case *ast.RawMemNode:
 		return c.checkRawMem(n)
 	case *ast.AsyncNode:
-		for _, s := range n.Body {
-			c.checkNode(s)
+		c.checkAsync(n)
+	case *ast.ShareNode:
+		// share(x): 宣言済み変数かチェック
+		if _, ok := c.vars[n.Name]; !ok {
+			c.addError(0, "TC5001", fmt.Sprintf(
+				"share: '%s' は未宣言の変数です。Asyncブロックより前に宣言してください",
+				n.Name,
+			))
 		}
 	case *ast.AwaitNode:
 		// Await対象の変数が存在するか
@@ -193,6 +199,30 @@ func (c *Checker) checkNode(node ast.Node) TypeInfo {
 		}
 	}
 	return TypeInfo{Kind: KindUnknown}
+}
+
+// ===== Async =====
+
+func (c *Checker) checkAsync(n *ast.AsyncNode) {
+	// share(x)されてない変数への書き込みを検出
+	sharedVars := map[string]bool{}
+	for _, s := range n.Body {
+		if sh, ok := s.(*ast.ShareNode); ok {
+			sharedVars[sh.Name] = true
+		}
+	}
+	for _, s := range n.Body {
+		if mut, ok := s.(*ast.MutationNode); ok {
+			if _, shared := sharedVars[mut.Name]; !shared {
+				// share宣言なしにAsyncブロック内でMutationしようとしている
+				c.addError(0, "TC5002", fmt.Sprintf(
+					"データ競合: '%s' はAsyncブロック内で変更されていますが share(%s) が宣言されていません",
+					mut.Name, mut.Name,
+				))
+			}
+		}
+		c.checkNode(s)
+	}
 }
 
 // ===== 関数 =====
