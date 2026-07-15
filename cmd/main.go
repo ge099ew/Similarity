@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"similarity/cel"
 	"similarity/cgen"
 	"similarity/codegen"
+	"similarity/ast"
 	"similarity/echo"
 	"similarity/lexer"
 	"similarity/parser"
@@ -13,8 +16,19 @@ import (
 	"strings"
 )
 
-func compile(input, baseName string, irOnly bool) {
-	// ① lexer → parser → AST
+func compile(input, baseName, dir string, irOnly bool) {
+	// ① .celファイルの読み込み
+	celFile, celErr := cel.Load(dir)
+	if celErr != nil {
+		fmt.Println("=== Cell Error ===")
+		fmt.Println(celErr)
+	}
+	if celFile != nil {
+		fmt.Print(celFile.Info())
+		fmt.Println()
+	}
+
+	// ② lexer → parser → AST
 	l := lexer.New(input)
 	tokens := l.Tokenize()
 	if len(l.Errors) > 0 {
@@ -49,10 +63,31 @@ func compile(input, baseName string, irOnly bool) {
 		return
 	}
 
-	// ③ Echo: riskブロックのスキャン・警告
+	// ③ cel: Import依存チェック
+	if celFile != nil {
+		var imports []string
+		for _, stmt := range prog.Statements {
+			if imp, ok := stmt.(*ast.ImportNode); ok {
+				imports = append(imports, imp.Module)
+			}
+		}
+		missing := celFile.CheckImports(imports)
+		if len(missing) > 0 {
+			fmt.Println("=== Cell Dependency Error ===")
+			for _, m := range missing {
+				fmt.Printf("  Import[%s] が project.cel の dependencies に含まれていません\n", m)
+			}
+			fmt.Println("project.cel に依存関係を追加してください。")
+			return
+		}
+	}
+
+	// ④ Echo: riskブロックのスキャン・警告
 	ec := echo.New(baseName)
 	ec.Scan(prog)
-	ec.WarnInline()
+	if !ec.WarnInline() {
+		return
+	}
 
 	// ④ QBE IR生成（関数を sim_main にリネーム）
 	ir := codegen.New().Generate(prog)
@@ -163,5 +198,6 @@ func main() {
 		fmt.Println("Error:", err)
 		os.Exit(1)
 	}
-	compile(string(b), filename, irOnly)
+	dir := filepath.Dir(filename)
+	compile(string(b), filename, dir, irOnly)
 }

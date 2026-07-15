@@ -74,13 +74,26 @@ func (e *Echo) HasRisk() bool {
 	return len(e.reports) > 0
 }
 
-// WarnInline: コンパイル中のシンプル警告
-func (e *Echo) WarnInline() {
+// WarnInline: コンパイル中の警告 + 確認プロンプト
+// 戻り値: false = ユーザーがnを選択（コンパイル中断）
+func (e *Echo) WarnInline() bool {
 	if !e.HasRisk() {
-		return
+		return true
 	}
 	ehoFile := ehoFilename(e.filename)
-	fmt.Printf("\n⚠️  risk block detected → %s を確認してください。\n\n", ehoFile)
+	fmt.Printf("\n⚠️  risk block detected → %s を確認してください。\n", ehoFile)
+	fmt.Printf("最終確認をしてください。コンパイルを続行しますか？ [Y/n]: ")
+
+	var input string
+	fmt.Scanln(&input)
+	input = strings.TrimSpace(strings.ToLower(input))
+
+	if input == "n" || input == "no" {
+		fmt.Println("コンパイルを中断しました。")
+		return false
+	}
+	fmt.Println()
+	return true
 }
 
 // Report: .ehoファイルに詳細レポートを書き出す

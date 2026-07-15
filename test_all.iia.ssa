@@ -1,6 +1,6 @@
 # Similarity - Application
-# type: AllFeatures
 # value: Test
+# type: AllFeatures
 
 function w $test_pointer() {
 @start

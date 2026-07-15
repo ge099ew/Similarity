@@ -1,0 +1,6 @@
+# Similarityプロジェクト設定
+name: TestProject
+version: 0.1.0
+dependencies:
+  - discord
+  - SDL2
