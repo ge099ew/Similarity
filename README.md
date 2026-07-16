@@ -1,96 +1,210 @@
-# このREADMEは古いままなので、誤ってる部分がある可能性があります。
+# Similarity
 
-# Similarity言語 進捗状況
- 
+**"No GC. No guessing. No C/C++"**
+
+C/C++を玉座から引きずり降ろすために設計されたシステムプログラミング言語。
+
+作者: 奇曲 宮夢 (Kikyoku Miyu)
+
+---
+
 ## 概要
-C++の「魔の領域」を安全・高速に置き換えることを目標としたオリジナルプログラミング言語。
- 
+
+Similarityは、C/C++依存ゼロを目指したオリジナルのシステムプログラミング言語です。GCなし、コンパイラは推測しない、unsafe操作は明示必須、速度は妥協しない、という哲学のもとに設計されています。
+
 ---
- 
-## 実装済み ✅
- 
-### コンパイラパイプライン
+
+## コンパイラパイプライン
+
 ```
-.iia → lexer → parser → AST → QBE IR → アセンブリ → バイナリ
+.iia → lexer → parser → AST → typecheck → QBE IR → アセンブリ → バイナリ
 ```
- 
-### 言語機能
-- 変数宣言 `Variable[let{int(x:10)}]`
-- 変数再代入 `Mutation[variable{int(x:30)}]`
-- If文 `If[check{le(hp,0)}, True[...], False[...]]`
-- ループ `Loop[for{...}, Body[...]]` / `Loop[Count{...}, Body[...]]`
-- 関数定義 `Func[名前{receive{...}, 処理, return{...}}]`
-- 再帰関数（fibonacci動作確認済み）
-- return文（If文の中でも使用可能）
-- エラーハンドリング `Error[try/Ok/Err]` / `Fatal[...]`
-- モジュール `Import[...]` / `Extern[...]`
-- 演算子 `+{int(a,b)}` `-{...}` `*{...}` `/{...}`
-- 比較演算子 `eq` `le` `lt` `ge` `gt` `ne`
-- `--ir-only` フラグ（フロントエンドのみ実行）
-- VSCodeシンタックスハイライト（`.iia`ファイル対応）
+
+将来的にはQBEをオリジナルIR（CAI）に置き換え、C/C++依存を完全排除します。
+
 ---
- 
+
+## 言語機能
+
+### 基本
+```iia
+Variable[let{int(x:10)}]                   // 変数宣言
+Variable[unclet{float(PI:3.14)}]           // 変更不可変数
+Mutation[variable{int(x:30)}]              // 変数再代入
+```
+
+### 制御フロー
+```iia
+If[check{less(hp:0)}, True[...], False[...]]
+Loop[for{int(i:0), less(i:10), step{1}}, Body[...]]
+Loop[Count{int(i:10)}, Body[...]]
+```
+
+### 関数
+```iia
+Function[名前{
+  receive{int(x)},
+  処理,
+  return(x)
+}]
+```
+
+### ポインタ
+```iia
+Variable[let{int(x:42)}]
+Variable[let{int(ptr:addr{x})}]    // アドレス取得
+
+Mem[risk{
+  Variable[let{int(val:deref{ptr})}]  // 参照外し
+}]
+```
+
+### 配列・cast
+```iia
+Variable[let{Array_int(arr:0)}]
+Variable[let{int(val:index{arr(i)})}]      // arr[i]
+Variable[let{float(y:cast{float(x)})}]     // int→float
+```
+
+### 構造体
+```iia
+Variable[struct{User:String(name), int(age)}]   // 定義
+Variable[let{user:User(name:"John", age:25)}]   // インスタンス生成
+```
+
+### 非同期
+```iia
+Variable[let{int(x:10)}]
+Async[{
+  share(x),                          // 共有変数の明示（必須）
+  Mutation[variable{int(x:30)}]
+}]
+Await[task]
+```
+
+### エラーハンドリング
+```iia
+Error[try{処理}, Ok[...], Err[type{FileNotFound}, msg{"..."}]]
+Fatal[type{OutOfMemory}, msg{"回復不能"}]
+```
+
+### モジュール
+```iia
+Import[discord{}]
+Extern[C{lib{"SDL2"}, draw{receive{int(x)}, return{}}}]
+```
+
+---
+
+## 安全性システム（コンパイル時）
+
+| エラーコード | 内容 |
+|---|---|
+| TC1001 | null許容型のnullチェックなしアクセス |
+| TC2001〜TC2010 | 型ミスマッチ・未宣言変数・配列型違反等 |
+| TC3002 | risk{}外でのderef使用 |
+| TC4001 | 整数オーバーフロー（32bit範囲超え） |
+| TC5001 | share: 未宣言変数 |
+| TC5002 | Async内でshare宣言なしにMutation |
+
+---
+
+## サポートシステム
+
+### Echo（.eho）
+コンパイル時にriskブロックを検出し、プロジェクト全体をスキャンしてレポートを生成します。
+
+```
+╔══════════════════════════════════════════╗
+║        ⚠️   RISK BLOCK DETECTED  ⚠️        ║
+╚══════════════════════════════════════════╝
+
+  [1] main.iia : line 20-21
+      → deref use
+
+  safe: utils.iia, math.iia （riskブロックなし）
+
+詳細は main.eho を確認してください。
+コンパイルを続行しますか？ [Y/n]:
+```
+
+### Cell（.cel）
+パッケージ管理ファイル。`project.cel`をプロジェクトルートに置きます。
+
+```
+name: MyProject
+version: 0.1.0
+dependencies:
+  - discord
+  - SDL2
+```
+
+---
+
 ## ベンチマーク結果
- 
+
 ### 実行速度
 | 言語 | 結果 | 時間 |
 |------|------|------|
 | Similarity (QBE) | 887459712 | 48.42ms |
 | C++ (g++ -O2) | 887459712 | 46.578ms |
- 
+
 → **ほぼ同等。計算結果も一致。**
- 
-## 大規模ファイルベンチマーク（1000回平均）
- 
-### 条件
+
+### コンパイル速度（1000回平均）
+
+条件: Similarityは`--ir-only`、C++は`-S`、大規模ファイル
+
+| 言語 | 平均時間 |
+|------|----------|
+| Similarity | 0.057s |
+| C++ | 0.312s |
+
+→ **約5.5倍速い**
+
+小規模ファイルでは約68倍速い。
+
+---
+
+## 使い方
+
+配布サイトからダウンロードしてください。
+
 ```
-Similarity: --ir-only（lexer+parser+AST+IR生成）
-C++:        -S（lexer+parser+型チェック+アセンブリ生成）
-ファイル規模: Similarity約7800行 / C++約6400行
-試行回数: 1000回
-```
- 
-| 言語 | 合計時間 | 平均時間 |
-|------|----------|----------|
-| Similarity | 57.069s | 0.057s |
-| C++ | 311.865s | 0.312s |
- 
-```
-Similarity: time sh -c 'for i in $(seq 1 1000); do ./sim --ir-only benchmark/bench_large.iia >/dev/null 2>&1; done'
-C++       : time sh -c 'for i in $(seq 1 1000); do g++ -S benchmark/bench_large.cpp -o /dev/null 2>&1; done'
+./sim your_file.iia
+./sim --ir-only your_file.iia   # QBE IRのみ生成（フロントエンドのみ）
 ```
 
-→ **約5.5倍速い（公平な条件での比較）**
- 
-### 補足
-- 前回（小ファイル）は68倍、今回（大ファイル）は5.5倍
-- ファイルが大きくなるとC++のオーバーヘッド比率が下がるため差が縮まるのは自然
-- SimilarityはC++より仕事量が多い（IR生成まで）のに5.5倍速い
-- Similarityはマルチコアを使用。(仕様)
-- これは**本物の数字**
-| 言語 | 計測方法 | 時間 |
-|------|----------|------|
-| Similarity | `--ir-only` | 0.005s |
-| C++ | `-fsyntax-only` | 0.341s |
-→ **約68倍速い。**
- 
 ---
- 
-## 未実装
- 
-- 高級版シンタックスシュガー（自己ホスト）
-- モジュールシステムの完全実装
-- C++ライブラリとのinterop
-- 型の互換性（C++複合型との対応）
-- 非同期・GPU処理
----
- 
-## 今後の予定
- 
-```
-① 高級版構文の実装（.iiaで高級版を書く）
-② 自己ホスト（SimilarityでSimilarityを書く）
-③ モジュールシステム完全実装
-④ C++interop
-```
 
+## 実装状況
+
+| 機能 | 状態 |
+|---|---|
+| lexer/parser | ✅ |
+| codegen（QBE） | ✅ |
+| ポインタ（addr/deref） | ✅ |
+| 配列アクセス（index） | ✅ |
+| cast（int↔float） | ✅ |
+| 構造体（struct） | ✅ |
+| Mem[risk{}] | ✅ |
+| Async/Await（pthread） | ✅ |
+| share()（データ競合検出） | ✅ |
+| typecheck（コンパイル時安全性） | ✅ |
+| Echo（.eho） | ✅ |
+| Cell（.cel） | ✅ |
+| CAI IR | 🔶 設計確定、実装未着手 |
+| 高級版構文 | 🔶 設計中 |
+| 標準ライブラリ | 🔶 未着手 |
+| GPU本実装 | 🔶 CAI完成後 |
+| 自己ホスト | 📅 長期目標 |
+
+---
+
+## 設計原則
+
+1. **コンパイラは推測しない** — 全て明示
+2. **unsafe操作はMem[risk{}]で明示**（Echoが自動レポート）
+3. **Async間の共有変数はshare()で明示**
+4. **速度は妥協しない** — GCなし、ゼロコスト抽象化
+5. **C/C++依存ゼロ**（CAI完成後）

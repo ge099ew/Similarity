@@ -3,15 +3,17 @@
 package echo
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
 	"similarity/ast"
+	"similarity/lexer"
+	"similarity/parser"
 	"strings"
 	"time"
 )
 
-// RiskReport: 一つのriskブロックの情報
 type RiskReport struct {
 	File      string
 	LineStart int
@@ -19,70 +21,177 @@ type RiskReport struct {
 	Ops       []string
 }
 
-// Echo: 開発者サポートシステム本体
 type Echo struct {
-	filename string
-	reports  []*RiskReport
+	filename    string
+	projectDir  string
+	reports     []*RiskReport
+	safeFiles   []string
+	allIiaFiles []string
 }
 
 func New(filename string) *Echo {
-	return &Echo{filename: filename}
-}
-
-// Scan: ASTを走査してriskブロックを収集
-func (e *Echo) Scan(prog *ast.Program) {
-	for _, stmt := range prog.Statements {
-		e.scanNode(stmt)
+	return &Echo{
+		filename:   filename,
+		projectDir: filepath.Dir(filename),
 	}
 }
 
-func (e *Echo) scanNode(node ast.Node) {
+// Scan: 単一ファイルのASTをスキャン
+func (e *Echo) Scan(prog *ast.Program) {
+	e.scanAST(e.filename, prog)
+}
+
+// ScanProject: プロジェクト全体の.iiaファイルをスキャン
+func (e *Echo) ScanProject() error {
+	files, err := filepath.Glob(filepath.Join(e.projectDir, "*.iia"))
+	if err != nil {
+		return err
+	}
+	e.allIiaFiles = files
+
+	for _, f := range files {
+		// コンパイル対象ファイルはScan()で処理済みなのでスキップ
+		if filepath.Base(f) == filepath.Base(e.filename) {
+			continue
+		}
+		b, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		l := lexer.New(string(b))
+		tokens := l.Tokenize()
+		prog := parser.New(tokens).ParseProgram()
+		e.scanAST(f, prog)
+	}
+
+	// safeファイルを収集
+	riskFiles := map[string]bool{}
+	for _, r := range e.reports {
+		riskFiles[r.File] = true
+	}
+	for _, f := range e.allIiaFiles {
+		if !riskFiles[f] {
+			e.safeFiles = append(e.safeFiles, filepath.Base(f))
+		}
+	}
+	return nil
+}
+
+func (e *Echo) scanAST(filename string, prog *ast.Program) {
+	for _, stmt := range prog.Statements {
+		e.scanNode(filename, stmt)
+	}
+}
+
+func (e *Echo) scanNode(filename string, node ast.Node) {
 	if node == nil {
 		return
 	}
 	switch n := node.(type) {
 	case *ast.FuncNode:
 		for _, s := range n.Body {
-			e.scanNode(s)
+			e.scanNode(filename, s)
 		}
 	case *ast.RawMemNode:
 		e.reports = append(e.reports, &RiskReport{
-			File:      e.filename,
+			File:      filename,
 			LineStart: n.LineStart,
 			LineEnd:   n.LineEnd,
 			Ops:       n.Ops,
 		})
 		for _, s := range n.Body {
-			e.scanNode(s)
+			e.scanNode(filename, s)
 		}
 	case *ast.IfNode:
 		for _, s := range n.True {
-			e.scanNode(s)
+			e.scanNode(filename, s)
 		}
 		for _, s := range n.False {
-			e.scanNode(s)
+			e.scanNode(filename, s)
 		}
 	case *ast.LoopNode:
 		for _, s := range n.Body {
-			e.scanNode(s)
+			e.scanNode(filename, s)
 		}
 	}
 }
 
-// HasRisk: riskブロックが存在するか
 func (e *Echo) HasRisk() bool {
 	return len(e.reports) > 0
 }
 
-// WarnInline: コンパイル中の警告 + 確認プロンプト
-// 戻り値: false = ユーザーがnを選択（コンパイル中断）
+// HasCurrentFileRisk: コンパイル対象ファイル自身にriskブロックがあるか
+func (e *Echo) HasCurrentFileRisk() bool {
+	for _, r := range e.reports {
+		if filepath.Base(r.File) == filepath.Base(e.filename) {
+			return true
+		}
+	}
+	return false
+}
+
+// WarnInline: .eho生成→CLI表示→Y/n確認
 func (e *Echo) WarnInline() bool {
 	if !e.HasRisk() {
 		return true
 	}
+
+	// コンパイル対象ファイル自身にriskがない場合はY/n不要
+	if !e.HasCurrentFileRisk() {
+		e.Report()
+		return true
+	}
+
+	// 先に.ehoを生成
+	e.Report()
+
 	ehoFile := ehoFilename(e.filename)
-	fmt.Printf("\n⚠️  risk block detected → %s を確認してください。\n", ehoFile)
-	fmt.Printf("最終確認をしてください。コンパイルを続行しますか？ [Y/n]: ")
+
+	// ASCII枠で目立たせる
+	fmt.Println()
+	fmt.Println("╔══════════════════════════════════════════╗")
+	fmt.Println("║        ⚠️   RISK BLOCK DETECTED  ⚠️        ║")
+	fmt.Println("╚══════════════════════════════════════════╝")
+	fmt.Println()
+
+	// riskブロック一覧（コンパイル対象ファイルのみ表示）
+	idx := 1
+	for _, r := range e.reports {
+		if filepath.Base(r.File) == filepath.Base(e.filename) {
+			fmt.Printf("  [%d] %s : line %d-%d\n", idx, filepath.Base(r.File), r.LineStart, r.LineEnd)
+			fmt.Printf("      → %s use\n", strings.Join(r.Ops, ", "))
+			fmt.Println()
+			idx++
+		}
+	}
+	// 他ファイルのriskがあれば概要だけ表示
+	otherRisk := []string{}
+	for _, r := range e.reports {
+		if filepath.Base(r.File) != filepath.Base(e.filename) {
+			otherRisk = append(otherRisk, filepath.Base(r.File))
+		}
+	}
+	if len(otherRisk) > 0 {
+		// 重複除去
+		seen := map[string]bool{}
+		uniq := []string{}
+		for _, f := range otherRisk {
+			if !seen[f] {
+				seen[f] = true
+				uniq = append(uniq, f)
+			}
+		}
+		fmt.Printf("  ⚠️  他ファイルにもriskブロックあり: %s\n\n", strings.Join(uniq, ", "))
+	}
+
+	// safeファイル一覧
+	if len(e.safeFiles) > 0 {
+		fmt.Printf("  safe: %s （riskブロックなし）\n", strings.Join(e.safeFiles, ", "))
+		fmt.Println()
+	}
+
+	fmt.Printf("詳細は %s を確認してください。\n", ehoFile)
+	fmt.Print("コンパイルを続行しますか？ [Y/n]: ")
 
 	var input string
 	fmt.Scanln(&input)
@@ -106,9 +215,12 @@ func (e *Echo) Report() {
 
 	var sb strings.Builder
 	sb.WriteString("Similarity Echo Report\n")
-	sb.WriteString(fmt.Sprintf("Generated : %s\n", time.Now().Format("2006-01-02 15:04:05")))
-	sb.WriteString(fmt.Sprintf("Source    : %s\n", e.filename))
+	sb.WriteString(fmt.Sprintf("Generated  : %s\n", time.Now().Format("2006-01-02 15:04:05")))
+	sb.WriteString(fmt.Sprintf("Source     : %s\n", e.filename))
 	sb.WriteString(fmt.Sprintf("Risk Blocks: %d\n", len(e.reports)))
+	if len(e.safeFiles) > 0 {
+		sb.WriteString(fmt.Sprintf("Safe Files : %s\n", strings.Join(e.safeFiles, ", ")))
+	}
 	sb.WriteString(strings.Repeat("-", 40) + "\n\n")
 
 	for i, r := range e.reports {
@@ -120,12 +232,39 @@ func (e *Echo) Report() {
 	sb.WriteString(strings.Repeat("-", 40) + "\n")
 	sb.WriteString("エディタでファイルを開き、上記の行番号に移動して内容を確認してください。\n")
 
+	// safe一覧
+	if len(e.safeFiles) > 0 {
+		sb.WriteString("\n[Safe Files]\n")
+		for _, f := range e.safeFiles {
+			sb.WriteString(fmt.Sprintf("  ✅ %s\n", f))
+		}
+	}
+
 	os.WriteFile(ehoFile, []byte(sb.String()), 0644)
 	fmt.Printf("Echo Report → %s\n", ehoFile)
 }
 
-// ehoFilename: .iiaファイル名から.ehoファイル名を生成
 func ehoFilename(filename string) string {
 	ext := filepath.Ext(filename)
 	return filename[:len(filename)-len(ext)] + ".eho"
+}
+
+// ReadLines: .iiaファイルの指定行を読む（エディタ連携用）
+func ReadLines(filename string, start, end int) []string {
+	f, err := os.Open(filename)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	var lines []string
+	scanner := bufio.NewScanner(f)
+	line := 1
+	for scanner.Scan() {
+		if line >= start && line <= end {
+			lines = append(lines, fmt.Sprintf("%d: %s", line, scanner.Text()))
+		}
+		line++
+	}
+	return lines
 }

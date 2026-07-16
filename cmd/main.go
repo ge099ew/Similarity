@@ -85,6 +85,7 @@ func compile(input, baseName, dir string, irOnly bool) {
 	// ④ Echo: riskブロックのスキャン・警告
 	ec := echo.New(baseName)
 	ec.Scan(prog)
+	ec.ScanProject()
 	if !ec.WarnInline() {
 		return
 	}
