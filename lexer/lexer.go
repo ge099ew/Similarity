@@ -56,6 +56,7 @@ const (
 	TOKEN_INDEX    TokenType = "INDEX"
 	TOKEN_BREAK    TokenType = "BREAK"
 	TOKEN_CONTINUE TokenType = "CONTINUE"
+	TOKEN_STRUCT   TokenType = "STRUCT"
 
 	TOKEN_LBRACKET TokenType = "["
 	TOKEN_RBRACKET TokenType = "]"
@@ -129,6 +130,7 @@ var keywords = map[string]TokenType{
 	"index":           TOKEN_INDEX,
 	"break":           TOKEN_BREAK,
 	"continue":        TOKEN_CONTINUE,
+	"struct":          TOKEN_STRUCT,
 
 	"lesseq":    TOKEN_LE,
 	"less":      TOKEN_LT,

@@ -99,8 +99,13 @@ func (c *Codegen) genTopLevel(node ast.Node) {
 	switch n := node.(type) {
 	case *ast.FuncNode:
 		c.genFunc(n)
-	case *ast.StructDefNode:
-		c.genStructDef(n)
+	case *ast.VariableNode:
+		// トップレベルのstruct定義はVariableNode{Type:"__struct__"}として来る
+		if n.Type == "__struct__" {
+			if def, ok := n.Value.(*ast.StructDefNode); ok {
+				c.genStructDef(def)
+			}
+		}
 	case *ast.ImportNode:
 		c.emit("# import %s", n.Module)
 	case *ast.ExternNode:
@@ -182,8 +187,6 @@ func (c *Codegen) genStmt(node ast.Node, indent string) {
 	switch n := node.(type) {
 	case *ast.VariableNode:
 		c.genVariable(n, indent)
-	case *ast.StructDefNode:
-		c.genStructDef(n)
 	case *ast.IfNode:
 		c.genIf(n, indent)
 	case *ast.ReturnNode:
@@ -310,6 +313,14 @@ func (c *Codegen) genStructInstance(varName string, si *ast.StructInstanceNode, 
 // ===== 変数 =====
 
 func (c *Codegen) genVariable(v *ast.VariableNode, indent string) {
+	// struct定義: Variable[struct{...}]
+	if v.Type == "__struct__" {
+		if def, ok := v.Value.(*ast.StructDefNode); ok {
+			c.genStructDef(def)
+		}
+		return
+	}
+
 	// StructInstance
 	if si, ok := v.Value.(*ast.StructInstanceNode); ok {
 		c.genStructInstance(v.Name, si, indent)

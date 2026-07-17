@@ -237,27 +237,115 @@ func (p *Parser) parseMutation() *ast.MutationNode {
 }
 
 // Variable[let{int(x:10)}] / Variable[unclet{float(PI:3.14)}]
+// Variable[struct{User:String(name), int(age)}]
+// Variable[let{user:User(name:"John", age:25)}]
 func (p *Parser) parseVariable() *ast.VariableNode {
 	p.advance() // skip Variable
 	p.expect(lexer.TOKEN_LBRACKET)
+
+	// struct定義: Variable[struct{...}]
+	if p.cur().Type == lexer.TOKEN_STRUCT {
+		return p.parseStructDef()
+	}
 
 	mutable := p.cur().Type == lexer.TOKEN_LET
 	p.advance() // skip let/unclet
 	p.expect(lexer.TOKEN_LBRACE)
 
-	node := p.arena.Add(&ast.VariableNode{Mutable: mutable}).(*ast.VariableNode)
-	node.Type = p.cur().Literal
-	p.advance() // int / float / bool / String / Box_int ...
+	// 型名を読む
+	typeName := p.cur().Literal
+	p.advance()
+
 	p.expect(lexer.TOKEN_LPAREN)
-	node.Name = p.cur().Literal
+	varName := p.cur().Literal
 	p.advance() // 変数名
 	p.expect(lexer.TOKEN_COLON)
+
+	// 次のトークンが識別子で、その後に ( が来る場合はstructインスタンス
+	// e.g. User(name:"John", age:25)
+	if p.cur().Type == lexer.TOKEN_IDENT && p.peek().Type == lexer.TOKEN_LPAREN {
+		si := p.parseStructInstance()
+		p.expect(lexer.TOKEN_RPAREN)
+		p.expect(lexer.TOKEN_RBRACE)
+		p.expect(lexer.TOKEN_RBRACKET)
+		// StructInstanceをVariableNodeのValueとして包む
+		wrapper := p.arena.Add(&ast.VariableNode{
+			Mutable: mutable,
+			Type:    typeName,
+			Name:    varName,
+			Value:   si,
+		}).(*ast.VariableNode)
+		return wrapper
+	}
+
+	node := p.arena.Add(&ast.VariableNode{Mutable: mutable}).(*ast.VariableNode)
+	node.Type = typeName
+	node.Name = varName
 	node.Value = p.parseLiteral()
 	p.expect(lexer.TOKEN_RPAREN)
 
 	p.expect(lexer.TOKEN_RBRACE)
 	p.expect(lexer.TOKEN_RBRACKET)
 	return node
+}
+
+// Variable[struct{User:String(name), int(age)}]
+// → VariableNode{Type:"__struct__", Name:"User", Value:StructDefNode{...}}
+func (p *Parser) parseStructDef() *ast.VariableNode {
+	p.advance() // skip struct
+	p.expect(lexer.TOKEN_LBRACE)
+
+	// 構造体名: e.g. "User"
+	structName := p.cur().Literal
+	p.advance()
+	p.expect(lexer.TOKEN_COLON)
+
+	var fields []ast.StructField
+	// フィールドをカンマ区切りで読む: String(name), int(age)
+	for p.cur().Type != lexer.TOKEN_RBRACE && p.cur().Type != lexer.TOKEN_EOF {
+		fieldType := p.cur().Literal
+		p.advance()
+		p.expect(lexer.TOKEN_LPAREN)
+		fieldName := p.cur().Literal
+		p.advance()
+		p.expect(lexer.TOKEN_RPAREN)
+		fields = append(fields, ast.StructField{Type: fieldType, Name: fieldName})
+		if p.cur().Type == lexer.TOKEN_COMMA {
+			p.advance()
+		}
+	}
+
+	p.expect(lexer.TOKEN_RBRACE)
+	p.expect(lexer.TOKEN_RBRACKET)
+
+	def := &ast.StructDefNode{Name: structName, Fields: fields}
+	return p.arena.Add(&ast.VariableNode{
+		Mutable: false,
+		Type:    "__struct__",
+		Name:    structName,
+		Value:   def,
+	}).(*ast.VariableNode)
+}
+
+// User(name:"John", age:25) → StructInstanceNode
+func (p *Parser) parseStructInstance() *ast.StructInstanceNode {
+	typeName := p.cur().Literal
+	p.advance() // skip type name
+	p.expect(lexer.TOKEN_LPAREN)
+
+	si := &ast.StructInstanceNode{TypeName: typeName}
+	for p.cur().Type != lexer.TOKEN_RPAREN && p.cur().Type != lexer.TOKEN_EOF {
+		fieldName := p.cur().Literal
+		p.advance()
+		p.expect(lexer.TOKEN_COLON)
+		val := p.parseLiteral()
+		si.Fields = append(si.Fields, ast.FieldValue{Name: fieldName, Value: val})
+		if p.cur().Type == lexer.TOKEN_COMMA {
+			p.advance()
+		}
+	}
+	p.expect(lexer.TOKEN_RPAREN)
+	return si
 }
 
 // If[check{le(hp,0)}, True[...], False[...]]

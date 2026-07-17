@@ -1,0 +1,50 @@
+# Similarity - Application
+# value: Test
+# type: Math
+
+
+# stdlib: math
+function w $absolute_value(w %x) {
+@start
+    %cond1 =w csltw %x, 0
+    jnz %cond1, @neg, @pos
+@neg
+    %r1 =w sub 0, %x
+    ret %r1
+@pos
+    ret %x
+}
+
+function w $maximum(w %a, w %b) {
+@start
+    %cond1 =w csgtw %a, %b
+    jnz %cond1, @retA, @retB
+@retA
+    ret %a
+@retB
+    ret %b
+}
+
+# import math
+export function w $sim_main() {
+@start
+    %neg.ptr =l alloc4 4
+    %r1 =w sub 0, 5
+    storew %r1, %neg.ptr
+    %a.ptr =l alloc4 4
+    %t2 =w loadw %neg.ptr
+    %ret3 =w call $absolute_value(w %t2)
+    storew %ret3, %a.ptr
+    %x.ptr =l alloc4 4
+    storew 3, %x.ptr
+    %y.ptr =l alloc4 4
+    storew 7, %y.ptr
+    %b.ptr =l alloc4 4
+    %t4 =w loadw %x.ptr
+    %t5 =w loadw %y.ptr
+    %ret6 =w call $maximum(w %t4, w %t5)
+    storew %ret6, %b.ptr
+    %t7 =w loadw %a.ptr
+    ret %t7
+}
+

@@ -28,7 +28,19 @@ function w $maximum(w %a, w %b) {
 }
 `
 
-// AvailableLibs: 利用可能なライブラリ一覧
+// MathLibC: Cフォールバック用math実装
+const MathLibC = `
+// stdlib: math (C fallback)
+static int absolute_value(int x) { return x < 0 ? -x : x; }
+static int maximum(int a, int b) { return a > b ? a : b; }
+`
+
+// AvailableLibs: 利用可能なライブラリ一覧（QBE IR）
 var AvailableLibs = map[string]string{
 	"math": MathLib,
+}
+
+// AvailableLibsC: 利用可能なライブラリ一覧（Cフォールバック）
+var AvailableLibsC = map[string]string{
+	"math": MathLibC,
 }

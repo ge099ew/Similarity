@@ -145,9 +145,8 @@ func (e *Echo) WarnInline() bool {
 	// 先に.ehoを生成
 	e.Report()
 
-	ehoFile := ehoFilename(e.filename)
+	ehoFile := ehoFilename(e.projectDir)
 
-	// ASCII枠で目立たせる
 	fmt.Println()
 	fmt.Println("╔══════════════════════════════════════════╗")
 	fmt.Println("║        ⚠️   RISK BLOCK DETECTED  ⚠️        ║")
@@ -164,6 +163,7 @@ func (e *Echo) WarnInline() bool {
 			idx++
 		}
 	}
+
 	// 他ファイルのriskがあれば概要だけ表示
 	otherRisk := []string{}
 	for _, r := range e.reports {
@@ -172,7 +172,6 @@ func (e *Echo) WarnInline() bool {
 		}
 	}
 	if len(otherRisk) > 0 {
-		// 重複除去
 		seen := map[string]bool{}
 		uniq := []string{}
 		for _, f := range otherRisk {
@@ -184,7 +183,6 @@ func (e *Echo) WarnInline() bool {
 		fmt.Printf("  ⚠️  他ファイルにもriskブロックあり: %s\n\n", strings.Join(uniq, ", "))
 	}
 
-	// safeファイル一覧
 	if len(e.safeFiles) > 0 {
 		fmt.Printf("  safe: %s （riskブロックなし）\n", strings.Join(e.safeFiles, ", "))
 		fmt.Println()
@@ -205,34 +203,34 @@ func (e *Echo) WarnInline() bool {
 	return true
 }
 
-// Report: .ehoファイルに詳細レポートを書き出す
+// Report: project.ehoにプロジェクト全体のレポートを書き出す
 func (e *Echo) Report() {
-	if !e.HasRisk() {
-		return
-	}
-
-	ehoFile := ehoFilename(e.filename)
+	ehoFile := ehoFilename(e.projectDir)
 
 	var sb strings.Builder
 	sb.WriteString("Similarity Echo Report\n")
 	sb.WriteString(fmt.Sprintf("Generated  : %s\n", time.Now().Format("2006-01-02 15:04:05")))
-	sb.WriteString(fmt.Sprintf("Source     : %s\n", e.filename))
 	sb.WriteString(fmt.Sprintf("Risk Blocks: %d\n", len(e.reports)))
 	if len(e.safeFiles) > 0 {
 		sb.WriteString(fmt.Sprintf("Safe Files : %s\n", strings.Join(e.safeFiles, ", ")))
 	}
-	sb.WriteString(strings.Repeat("-", 40) + "\n\n")
+	sb.WriteString(strings.Repeat("-", 40) + "\n")
 
-	for i, r := range e.reports {
-		sb.WriteString(fmt.Sprintf("[%d] %s : line %d-%d\n", i+1, r.File, r.LineStart, r.LineEnd))
-		sb.WriteString(fmt.Sprintf("    → %s use\n", strings.Join(r.Ops, ", ")))
-		sb.WriteString("    メモリ安全性は保証されません。\n\n")
+	if len(e.reports) > 0 {
+		sb.WriteString("Use risk block\n")
+		for i, r := range e.reports {
+			sb.WriteString(fmt.Sprintf("[%d] %s : line %d-%d\n", i+1, filepath.Base(r.File), r.LineStart, r.LineEnd))
+			sb.WriteString(fmt.Sprintf("    → %s use\n", strings.Join(r.Ops, ", ")))
+			sb.WriteString("    メモリ安全性は保証されません。\n")
+			if i < len(e.reports)-1 {
+				sb.WriteString("\n")
+			}
+		}
 	}
 
 	sb.WriteString(strings.Repeat("-", 40) + "\n")
 	sb.WriteString("エディタでファイルを開き、上記の行番号に移動して内容を確認してください。\n")
 
-	// safe一覧
 	if len(e.safeFiles) > 0 {
 		sb.WriteString("\n[Safe Files]\n")
 		for _, f := range e.safeFiles {
@@ -244,9 +242,9 @@ func (e *Echo) Report() {
 	fmt.Printf("Echo Report → %s\n", ehoFile)
 }
 
-func ehoFilename(filename string) string {
-	ext := filepath.Ext(filename)
-	return filename[:len(filename)-len(ext)] + ".eho"
+// ehoFilename: プロジェクトディレクトリにproject.ehoを置く
+func ehoFilename(projectDir string) string {
+	return filepath.Join(projectDir, "project.eho")
 }
 
 // ReadLines: .iiaファイルの指定行を読む（エディタ連携用）

@@ -1,14 +1,12 @@
 Similarity Echo Report
-Generated  : 2026-07-17 14:56:05
-Source     : test_all.iia
+Generated  : 2026-07-17 15:32:56
 Risk Blocks: 1
 Safe Files : test_errors.iia, test_math.iia
 ----------------------------------------
-
+Use risk block
 [1] test_all.iia : line 20-21
     → deref use
     メモリ安全性は保証されません。
-
 ----------------------------------------
 エディタでファイルを開き、上記の行番号に移動して内容を確認してください。
 

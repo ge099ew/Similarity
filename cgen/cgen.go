@@ -4,6 +4,7 @@ package cgen
 import (
 	"fmt"
 	"similarity/ast"
+	"similarity/stdlib"
 	"strings"
 )
 
@@ -100,7 +101,11 @@ func (c *CGen) genTopLevel(node ast.Node) {
 			c.emit("%s %s = 0;", ct, n.Name)
 		}
 	case *ast.ImportNode:
-		c.emit("// import %s", n.Module)
+		if cImpl, ok := stdlib.AvailableLibsC[n.Module]; ok {
+			c.emit("%s", cImpl)
+		} else {
+			c.emit("// import %s (external)", n.Module)
+		}
 	case *ast.ExternNode:
 		for _, lib := range n.Libs {
 			c.emit("// extern: %s", lib)
@@ -132,10 +137,10 @@ func (c *CGen) genFuncAs(fn *ast.FuncNode, name string) {
 		c.genStmt(stmt, "    ")
 	}
 
+	// return()はBodyにReturnNodeとして入っている。
+	// fn.Returnsが残っている場合（旧構文互換）はそちらも処理。
 	if fn.Returns != nil {
 		c.emit("    return %s;", c.evalLiteral(fn.Returns))
-	} else {
-		c.emit("    return 0;")
 	}
 	c.emit("}")
 	c.emit("")
@@ -145,6 +150,10 @@ func (c *CGen) genFuncAs(fn *ast.FuncNode, name string) {
 func (c *CGen) genStmt(node ast.Node, indent string) {
 	switch n := node.(type) {
 	case *ast.VariableNode:
+		// struct定義はスキップ
+		if n.Type == "__struct__" {
+			return
+		}
 		ct := c.cType(n.Type)
 		if _, exists := c.vars[n.Name]; exists {
 			// 既に宣言済み → 再代入（再宣言しない、シャドーイング防止）
@@ -158,6 +167,12 @@ func (c *CGen) genStmt(node ast.Node, indent string) {
 			} else {
 				c.emit("%s%s %s = 0;", indent, ct, n.Name)
 			}
+		}
+	case *ast.ReturnNode:
+		if n.Value != nil {
+			c.emit("%sreturn %s;", indent, c.evalLiteral(n.Value))
+		} else {
+			c.emit("%sreturn 0;", indent)
 		}
 	case *ast.IfNode:
 		c.genIf(n, indent)
@@ -253,6 +268,22 @@ func (c *CGen) evalLiteral(node ast.Node) string {
 		left := c.evalLiteral(n.Left)
 		right := c.evalLiteral(n.Right)
 		return fmt.Sprintf("(%s %s %s)", left, n.Op, right)
+	case *ast.CallNode:
+		var args []string
+		for _, arg := range n.Args {
+			args = append(args, c.evalLiteral(arg))
+		}
+		return fmt.Sprintf("%s(%s)", n.FuncName, strings.Join(args, ", "))
+	case *ast.CastNode:
+		inner := c.evalLiteral(n.Value)
+		return fmt.Sprintf("((%s)%s)", c.cType(n.Type), inner)
+	case *ast.AddressNode:
+		return fmt.Sprintf("&%s", n.Name)
+	case *ast.DerefNode:
+		return fmt.Sprintf("*%s", n.Name)
+	case *ast.IndexNode:
+		idx := c.evalLiteral(n.Index)
+		return fmt.Sprintf("%s[%s]", n.Name, idx)
 	}
 	return "0"
 }

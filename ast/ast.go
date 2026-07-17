@@ -234,3 +234,37 @@ func (b *BreakNode) TokenLiteral() string { return "break" }
 type ContinueNode struct{}
 
 func (c *ContinueNode) TokenLiteral() string { return "continue" }
+
+// ===== struct =====
+
+// StructField: struct定義の1フィールド（型名+フィールド名）
+// e.g. int(age) → StructField{Type:"int", Name:"age"}
+type StructField struct {
+	Type string
+	Name string
+}
+
+// StructDefNode: struct型定義
+// Variable[struct{User:String(name), int(age)}]
+type StructDefNode struct {
+	Name   string        // 構造体名 e.g. "User"
+	Fields []StructField // フィールド一覧
+}
+
+func (s *StructDefNode) TokenLiteral() string { return "struct" }
+
+// FieldValue: structインスタンス生成時の各フィールドの値
+// e.g. name:"John"
+type FieldValue struct {
+	Name  string
+	Value Node
+}
+
+// StructInstanceNode: structインスタンス生成
+// Variable[let{user:User(name:"John", age:25)}]
+type StructInstanceNode struct {
+	TypeName string       // 構造体型名 e.g. "User"
+	Fields   []FieldValue // フィールドと値の対
+}
+
+func (s *StructInstanceNode) TokenLiteral() string { return "StructInstance" }
