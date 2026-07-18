@@ -133,6 +133,7 @@ func (e *Echo) HasCurrentFileRisk() bool {
 // WarnInline: .eho生成→CLI表示→Y/n確認
 func (e *Echo) WarnInline() bool {
 	if !e.HasRisk() {
+		e.Report()
 		return true
 	}
 
@@ -203,7 +204,7 @@ func (e *Echo) WarnInline() bool {
 	return true
 }
 
-// Report: project.ehoにプロジェクト全体のレポートを書き出す
+// Report: project.ehoにプロジェクト全体のレポートを書き出す（riskなしでも生成）
 func (e *Echo) Report() {
 	ehoFile := ehoFilename(e.projectDir)
 
