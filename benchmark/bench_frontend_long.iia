@@ -1,0 +1,67 @@
+Explanation[Application{Benchmark(type:frontend_long)}]
+
+Function[func_0{ receive{int(a)}, Variable[let{int(x:0)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_1{ receive{int(a)}, Variable[let{int(x:1)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_2{ receive{int(a)}, Variable[let{int(x:2)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_3{ receive{int(a)}, Variable[let{int(x:3)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_4{ receive{int(a)}, Variable[let{int(x:4)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_5{ receive{int(a)}, Variable[let{int(x:5)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_6{ receive{int(a)}, Variable[let{int(x:6)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_7{ receive{int(a)}, Variable[let{int(x:7)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_8{ receive{int(a)}, Variable[let{int(x:8)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_9{ receive{int(a)}, Variable[let{int(x:9)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_10{ receive{int(a)}, Variable[let{int(x:10)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_11{ receive{int(a)}, Variable[let{int(x:11)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_12{ receive{int(a)}, Variable[let{int(x:12)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_13{ receive{int(a)}, Variable[let{int(x:13)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_14{ receive{int(a)}, Variable[let{int(x:14)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_15{ receive{int(a)}, Variable[let{int(x:15)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_16{ receive{int(a)}, Variable[let{int(x:16)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_17{ receive{int(a)}, Variable[let{int(x:17)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_18{ receive{int(a)}, Variable[let{int(x:18)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_19{ receive{int(a)}, Variable[let{int(x:19)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_20{ receive{int(a)}, Variable[let{int(x:20)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_21{ receive{int(a)}, Variable[let{int(x:21)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_22{ receive{int(a)}, Variable[let{int(x:22)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_23{ receive{int(a)}, Variable[let{int(x:23)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_24{ receive{int(a)}, Variable[let{int(x:24)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_25{ receive{int(a)}, Variable[let{int(x:25)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_26{ receive{int(a)}, Variable[let{int(x:26)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_27{ receive{int(a)}, Variable[let{int(x:27)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_28{ receive{int(a)}, Variable[let{int(x:28)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_29{ receive{int(a)}, Variable[let{int(x:29)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_30{ receive{int(a)}, Variable[let{int(x:30)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_31{ receive{int(a)}, Variable[let{int(x:31)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_32{ receive{int(a)}, Variable[let{int(x:32)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_33{ receive{int(a)}, Variable[let{int(x:33)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_34{ receive{int(a)}, Variable[let{int(x:34)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_35{ receive{int(a)}, Variable[let{int(x:35)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_36{ receive{int(a)}, Variable[let{int(x:36)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_37{ receive{int(a)}, Variable[let{int(x:37)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_38{ receive{int(a)}, Variable[let{int(x:38)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_39{ receive{int(a)}, Variable[let{int(x:39)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_40{ receive{int(a)}, Variable[let{int(x:40)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_41{ receive{int(a)}, Variable[let{int(x:41)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_42{ receive{int(a)}, Variable[let{int(x:42)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_43{ receive{int(a)}, Variable[let{int(x:43)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_44{ receive{int(a)}, Variable[let{int(x:44)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_45{ receive{int(a)}, Variable[let{int(x:45)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_46{ receive{int(a)}, Variable[let{int(x:46)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_47{ receive{int(a)}, Variable[let{int(x:47)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_48{ receive{int(a)}, Variable[let{int(x:48)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+Function[func_49{ receive{int(a)}, Variable[let{int(x:49)}], Variable[let{int(y:+{int(a:x)})}], return(y) }]
+
+Function[main{
+  receive{},
+  Variable[let{int(r0:call{func_0(0)})}],
+  Variable[let{int(r1:call{func_1(1)})}],
+  Variable[let{int(r2:call{func_2(2)})}],
+  Variable[let{int(r3:call{func_3(3)})}],
+  Variable[let{int(r4:call{func_4(4)})}],
+  Variable[let{int(r5:call{func_5(5)})}],
+  Variable[let{int(r6:call{func_6(6)})}],
+  Variable[let{int(r7:call{func_7(7)})}],
+  Variable[let{int(r8:call{func_8(8)})}],
+  Variable[let{int(r9:call{func_9(9)})}],
+  return(r0)
+}]

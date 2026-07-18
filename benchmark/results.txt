@@ -1,0 +1,38 @@
+go build -o sim ./cmd/を毎回した場合。
+
+./sim benchmark/bench_fib.iia && ./benchmark/bench_fib.iia.out
+Echo Report → benchmark/project.eho
+QBE IR  → benchmark/bench_fib.iia.ssa
+Backend: QBE ✅
+Assembly → benchmark/bench_fib.iia.s
+Binary  → benchmark/bench_fib.iia.out ✅
+Echo Report → benchmark/project.eho
+Similarity result: 102334155  time: 1303.10ms
+
+./sim benchmark/bench_sum.iia && ./benchmark/bench_sum.iia.out
+Echo Report → benchmark/project.eho
+QBE IR  → benchmark/bench_sum.iia.ssa
+Backend: QBE ✅
+Assembly → benchmark/bench_sum.iia.s
+Binary  → benchmark/bench_sum.iia.out ✅
+Echo Report → benchmark/project.eho
+Similarity result: 987459712  time: 48.49ms
+
+./sim benchmark/bench_sum.sml && ./benchmark/bench_sum.iia.out
+Transpile → benchmark/bench_sum.iia
+Echo Report → benchmark/project.eho
+QBE IR  → benchmark/bench_sum.iia.ssa
+Backend: QBE ✅
+Assembly → benchmark/bench_sum.iia.s
+Binary  → benchmark/bench_sum.iia.out ✅
+Echo Report → benchmark/project.eho
+Similarity result: 987459712  time: 50.91ms
+
+time ./sim --ir-only benchmark/bench_frontend_short.iia
+Echo Report → benchmark/project.eho
+QBE IR  → benchmark/bench_frontend_short.iia.ssa
+QBE IR → benchmark/bench_frontend_short.iia.ssa
+
+real    0m0.053s
+user    0m0.069s
+sys     0m0.045s

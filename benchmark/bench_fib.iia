@@ -2,19 +2,18 @@ Explanation[Application{Benchmark(type:fibonacci)}]
 
 Function[fibonacci{
   receive{int(n)},
-  If[check{lesseq(n,1)},
-    True[return{n}],
+  If[check{lesseq(n:1)},
+    True[return(n)],
     False[
       Variable[let{int(a:call{fibonacci(-{int(n:1)})})}],
       Variable[let{int(b:call{fibonacci(-{int(n:2)})})}],
-      return{+{int(a:b)}}
+      return(+{int(a:b)})
     ]
-  ],
-  return{0}
+  ]
 }]
 
 Function_public[main{
   receive{},
-  Variable[let{int(result:call{fibonacci(10)})}],
-  return{result}
+  Variable[let{int(result:call{fibonacci(40)})}],
+  return(result)
 }]

@@ -12,20 +12,25 @@ import (
 	"similarity/echo"
 	"similarity/lexer"
 	"similarity/parser"
+	"similarity/transpiler"
 	"similarity/typecheck"
 	"strings"
 )
 
 func compile(input, baseName, dir string, irOnly bool) {
-	// ① .celファイルの読み込み
-	celFile, celErr := cel.Load(dir)
-	if celErr != nil {
-		fmt.Println("=== Cell Error ===")
-		fmt.Println(celErr)
-	}
-	if celFile != nil {
-		fmt.Print(celFile.Info())
-		fmt.Println()
+	// ① .celファイルの読み込み（ir-onlyモードではスキップ）
+	var celFile *cel.CelFile
+	if !irOnly {
+		var celErr error
+		celFile, celErr = cel.Load(dir)
+		if celErr != nil {
+			fmt.Println("=== Cell Error ===")
+			fmt.Println(celErr)
+		}
+		if celFile != nil {
+			fmt.Print(celFile.Info())
+			fmt.Println()
+		}
 	}
 
 	// ② lexer → parser → AST
@@ -82,12 +87,14 @@ func compile(input, baseName, dir string, irOnly bool) {
 		}
 	}
 
-	// ④ Echo: riskブロックのスキャン・警告
-	ec := echo.New(baseName)
-	ec.Scan(prog)
-	ec.ScanProject()
-	if !ec.WarnInline() {
-		return
+	// ④ Echo: riskブロックのスキャン・警告（ir-onlyモードではスキップ）
+	if !irOnly {
+		ec := echo.New(baseName)
+		ec.Scan(prog)
+		ec.ScanProject()
+		if !ec.WarnInline() {
+			return
+		}
 	}
 
 	// ④ QBE IR生成（関数を sim_main にリネーム）
@@ -177,7 +184,10 @@ int main() {
 	fmt.Printf("Binary  → %s ✅\n", binFile)
 
 	// Echo: コンパイル後レポート
-	ec.Report()
+	ecFinal := echo.New(baseName)
+	ecFinal.Scan(prog)
+	ecFinal.ScanProject()
+	ecFinal.Report()
 }
 
 func main() {
@@ -199,6 +209,21 @@ func main() {
 		fmt.Println("Error:", err)
 		os.Exit(1)
 	}
+	src := string(b)
 	dir := filepath.Dir(filename)
-	compile(string(b), filename, dir, irOnly)
+
+	// .sml → .iia トランスパイル
+	if strings.HasSuffix(filename, ".sml") {
+		iiaSource := transpiler.Transpile(src)
+		iiaFile := strings.TrimSuffix(filename, ".sml") + ".iia"
+		if err := os.WriteFile(iiaFile, []byte(iiaSource), 0644); err != nil {
+			fmt.Println("トランスパイルエラー:", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Transpile → %s\n", iiaFile)
+		src = iiaSource
+		filename = iiaFile
+	}
+
+	compile(src, filename, dir, irOnly)
 }
