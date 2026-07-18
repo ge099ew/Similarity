@@ -4,7 +4,7 @@ package error
 
 import "fmt"
 
-// エラーナンバー体系
+// エラーナンバー
 // 1xxxx: 構文エラー
 // 2xxxx: 型エラー
 // 3xxxx: メモリエラー

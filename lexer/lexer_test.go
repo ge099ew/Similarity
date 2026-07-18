@@ -25,13 +25,18 @@ func TestIfToken(t *testing.T) {
 	input := `If[check{le(hp,0)},True[Move(hp)],False[Drop(hp)]]`
 	l := New(input)
 	tokens := l.Tokenize()
-	// 全トークンをデバッグ出力
 	for i, tok := range tokens {
 		t.Logf("token[%d]: %s %q", i, tok.Type, tok.Literal)
 	}
-	if tokens[0].Type != TOKEN_IF    { t.Errorf("want IF, got %s", tokens[0].Type) }
-	if tokens[2].Type != TOKEN_CHECK { t.Errorf("want CHECK, got %s", tokens[2].Type) }
-	if tokens[12].Type != TOKEN_TRUE { t.Errorf("want TRUE at 12, got %s", tokens[12].Type) }
+	if tokens[0].Type != TOKEN_IF {
+		t.Errorf("want IF, got %s", tokens[0].Type)
+	}
+	if tokens[2].Type != TOKEN_CHECK {
+		t.Errorf("want CHECK, got %s", tokens[2].Type)
+	}
+	if tokens[12].Type != TOKEN_TRUE {
+		t.Errorf("want TRUE at 12, got %s", tokens[12].Type)
+	}
 }
 
 func TestStringError(t *testing.T) {
@@ -60,9 +65,17 @@ func TestFloatAndBool(t *testing.T) {
 	tokens := l.Tokenize()
 	hasFloat, hasBool := false, false
 	for _, tok := range tokens {
-		if tok.Type == TOKEN_FLOAT_LIT && tok.Literal == "3.14" { hasFloat = true }
-		if tok.Type == TOKEN_BOOL_LIT  && tok.Literal == "true"  { hasBool = true }
+		if tok.Type == TOKEN_FLOAT_LIT && tok.Literal == "3.14" {
+			hasFloat = true
+		}
+		if tok.Type == TOKEN_BOOL_LIT && tok.Literal == "true" {
+			hasBool = true
+		}
 	}
-	if !hasFloat { t.Error("float 3.14 が検出されない") }
-	if !hasBool  { t.Error("bool true が検出されない") }
+	if !hasFloat {
+		t.Error("float 3.14 が検出されない")
+	}
+	if !hasBool {
+		t.Error("bool true が検出されない")
+	}
 }
