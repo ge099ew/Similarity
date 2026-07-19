@@ -5,10 +5,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"similarity/ast"
+	"similarity/caigen"
 	"similarity/cel"
 	"similarity/cgen"
 	"similarity/codegen"
-	"similarity/ast"
 	"similarity/echo"
 	"similarity/lexer"
 	"similarity/parser"
@@ -192,16 +193,30 @@ int main() {
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("Usage: sim <file.iia>")
-		fmt.Println("  QBEがあれば自動的にQBEを使います")
-		fmt.Println("  なければCにフォールバックします")
+		fmt.Println("Usage: sim [--ir-only] [--cai] <file.iia|file.sml>")
+		fmt.Println("  --ir-only : QBE IRファイルのみ生成")
+		fmt.Println("  --cai     : CAIバックエンドを使用")
 		os.Exit(1)
 	}
+
 	irOnly := false
-	filename := os.Args[1]
-	if os.Args[1] == "--ir-only" {
-		irOnly = true
-		filename = os.Args[2]
+	useCAI := false
+	filename := ""
+
+	for _, arg := range os.Args[1:] {
+		switch arg {
+		case "--ir-only":
+			irOnly = true
+		case "--cai":
+			useCAI = true
+		default:
+			filename = arg
+		}
+	}
+
+	if filename == "" {
+		fmt.Println("Error: ファイルを指定してください")
+		os.Exit(1)
 	}
 
 	b, err := os.ReadFile(filename)
@@ -225,5 +240,87 @@ func main() {
 		filename = iiaFile
 	}
 
+	if useCAI {
+		compileCAI(src, filename, dir)
+		return
+	}
+
 	compile(src, filename, dir, irOnly)
+}
+
+func compileCAI(input, baseName, dir string) {
+	// .cel読み込み
+	celFile, celErr := cel.Load(dir)
+	if celErr != nil {
+		fmt.Println("=== Cell Error ===")
+		fmt.Println(celErr)
+	}
+	if celFile != nil {
+		fmt.Print(celFile.Info())
+		fmt.Println()
+	}
+
+	// lexer → parser → AST
+	l := lexer.New(input)
+	tokens := l.Tokenize()
+	p := parser.New(tokens)
+	prog := p.ParseProgram()
+
+	if len(p.Errors) > 0 {
+		fmt.Println("=== Parser Errors ===")
+		for _, e := range p.Errors {
+			fmt.Println(e)
+		}
+		return
+	}
+
+	// typecheck
+	tc := typecheck.New()
+	tcErrors := tc.Check(prog)
+	if len(tcErrors) > 0 {
+		fmt.Println("=== Type Check Errors ===")
+		for _, e := range tcErrors {
+			fmt.Println(e)
+		}
+		fmt.Println("コンパイルを中断しました。型エラーを修正してください。")
+		return
+	}
+
+	// CAI IR生成
+	cg := caigen.New()
+	caiSrc := cg.Generate(prog)
+
+	caiFile := baseName + ".cai"
+	if err := os.WriteFile(caiFile, []byte(caiSrc), 0644); err != nil {
+		fmt.Println("CAI書き込みエラー:", err)
+		return
+	}
+	fmt.Printf("CAI IR → %s\n", caiFile)
+
+	// Echo
+	ec := echo.New(baseName)
+	ec.Scan(prog)
+	ec.ScanProject()
+	if !ec.WarnInline() {
+		return
+	}
+
+	// CAI変換器でバイナリ生成
+	// sim実行ファイルと同じディレクトリのcai_converterを探す
+	exePath, _ := os.Executable()
+	converterPath := filepath.Join(filepath.Dir(exePath), "cai_conv")
+	if _, err := os.Stat(converterPath); err != nil {
+		converterPath = filepath.Join(".", "cai_conv")
+	}
+
+	binFile := baseName + ".out"
+	cmd := exec.Command(converterPath, caiFile, binFile)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		fmt.Println("CAI変換エラー:", err)
+		return
+	}
+
+	ec.Report()
 }
