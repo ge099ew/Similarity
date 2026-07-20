@@ -1,0 +1,29 @@
+# Similarity - Application
+# type: sum
+# value: Benchmark
+
+export func $main
+  alloc  %i.ptr 4
+  store  %i.ptr 0
+  alloc  %sum.ptr 4
+  store  %sum.ptr 0
+  alloc  %i.ptr 4
+  store  %i.ptr 0
+  label  lbl1
+  load   %t1 %i.ptr
+  cle    %t2 %t1 100000000
+  jnz    %t2 lbl2 lbl3
+  label  lbl2
+    load   %t3 %sum.ptr
+    load   %t4 %i.ptr
+    add    %t5 %t3 %t4
+    store  %sum.ptr %t5
+  load   %t6 %i.ptr
+  add    %t7 %t6 1
+  store  %i.ptr %t7
+  jmp    lbl1
+  label  lbl3
+  load   %t8 %sum.ptr
+  ret    %t8
+endfunc
+
