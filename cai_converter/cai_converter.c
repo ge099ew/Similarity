@@ -210,6 +210,7 @@ static void store_eax_to(const char *dst){
     if(vregs[i].phys_reg>=0){
         int pr=phys_to_reg(vregs[i].phys_reg);
         if(pr!=EAX) emit_mov_r32(pr,EAX);
+        /* pr==EAX の場合は no-op（EAXがそのまま物理レジスタ） */
     } else {
         emit_store_r32(EAX, vregs[i].stack_off);
     }
@@ -224,7 +225,11 @@ static void load_to_eax(const char *val){
         if(i>=0){
             if(vregs[i].phys_reg>=0){
                 int pr=phys_to_reg(vregs[i].phys_reg);
-                if(pr!=EAX) emit_mov_r32(EAX,pr);
+                if(pr==EAX){
+                    /* 既にEAXと同じレジスタ → no-op */
+                } else {
+                    emit_mov_r32(EAX,pr);
+                }
             } else {
                 emit_load_r32(EAX, vregs[i].stack_off);
             }
@@ -479,8 +484,13 @@ static void gen_func(FuncInfo *fn){
         case OP_STORE: {
             load_to_eax(ins->a);
             int idx=find_vreg(ins->dst); if(idx<0) idx=alloc_slot(ins->dst);
-            if(vregs[idx].phys_reg>=0){ int pr=phys_to_reg(vregs[idx].phys_reg); if(pr!=EAX) emit_mov_r32(pr,EAX); }
-            else emit_store_r32(EAX, vregs[idx].stack_off);
+            if(vregs[idx].phys_reg>=0){
+                int pr=phys_to_reg(vregs[idx].phys_reg);
+                if(pr!=EAX) emit_mov_r32(pr,EAX);
+                /* スタックには書かない */
+            } else {
+                emit_store_r32(EAX, vregs[idx].stack_off);
+            }
             set_eax(ins->dst);
             break;
         }
@@ -580,6 +590,8 @@ static void gen_func(FuncInfo *fn){
         }
 
         case OP_LABEL:
+            /* ラベル到達時、物理レジスタに入っている値はそのまま有効
+               スタックの値は不明（他のパスから来る可能性）*/
             reset_eax();
             label_def(ins->dst);
             break;

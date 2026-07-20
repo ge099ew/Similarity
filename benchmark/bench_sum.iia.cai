@@ -1,6 +1,6 @@
 # Similarity - Application
-# type: sum
 # value: Benchmark
+# type: sum
 
 export func $main
   alloc  %i.ptr 4
