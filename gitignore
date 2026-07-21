@@ -1,0 +1,29 @@
+# ビルド成果物
+sim
+cai_conv
+
+# 中間ファイル
+*.ssa
+*.s
+*.o
+*.out
+*_wrapper.c
+*_helper.c
+
+# Echoレポート
+*.eho
+
+# トランスパイル生成ファイル（.smlから生成される.iia）
+benchmark/bench_fib.iia
+benchmark/bench_sum.iia
+benchmark/bench_frontend_short.iia
+
+# テスト生成ファイル
+test_sugar.iia
+test_sugar2.iia
+
+# CAI IR
+*.cai
+
+# ベンチマーク結果
+benchmark/benchmark_results*.txt
