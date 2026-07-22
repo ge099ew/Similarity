@@ -1,0 +1,13 @@
+Explanation[Application{Test(type:Math)}]
+
+Import[math{}]
+
+Function[main{
+  receive{},
+  Variable[let{int(neg:-{int(0:5)})}],
+  Variable[let{int(a:call{absolute_value(neg)})}],
+  Variable[let{int(x:3)}],
+  Variable[let{int(y:7)}],
+  Variable[let{int(b:call{maximum(x, y)})}],
+  return(a)
+}]
