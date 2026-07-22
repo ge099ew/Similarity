@@ -1,29 +1,44 @@
-# ビルド成果物
+# ビルド成果物（バイナリ）
 sim
 cai_conv
+cai_converter/cai_converter
+cai_converter/cai_converter_bin
 
-# 中間ファイル
+# ベンチマーク用コンパイル済みバイナリ
+benchmark/bench_fib_cpp
+benchmark/bench_sum_cpp
+benchmark/_*
+
+# 拡張子で終わるファイル全て（複合拡張子対応）
+**/*.ssa
+**/*.s
+**/*.o
+**/*.cai
+**/*.eho
+**/*.out
+**/*_wrapper.c
+**/*_helper.c
+
+# ルート直下
 *.ssa
 *.s
 *.o
+*.cai
+*.eho
 *.out
 *_wrapper.c
 *_helper.c
 
-# Echoレポート
-*.eho
+# ベンチマーク結果
+benchmark/benchmark_results*.txt
 
-# トランスパイル生成ファイル（.smlから生成される.iia）
+# .smlから生成された.iia
 benchmark/bench_fib.iia
 benchmark/bench_sum.iia
-benchmark/bench_frontend_short.iia
 
-# テスト生成ファイル
+# トランスパイル生成
 test_sugar.iia
 test_sugar2.iia
 
-# CAI IR
-*.cai
-
-# ベンチマーク結果
-benchmark/benchmark_results*.txt
+# project.eho
+project.eho
