@@ -1,0 +1,45 @@
+# ホワイトリスト方式: 全部無視して許可するものだけ通す
+
+# 全部無視
+*
+
+# ディレクトリは通す
+!*/
+
+# ソースコード
+!*.go
+!*.c
+!*.h
+!*.iia
+!*.sml
+!*.cpp
+!*.sh
+!*.md
+!*.txt
+!*.toml
+!*.json
+!*.cel
+
+# プロジェクトファイル
+!go.mod
+!go.sum
+!.gitignore
+!LICENSE.txt
+
+# ただしビルド成果物は除外（上書き）
+sim
+cai_conv
+*.out
+*.ssa
+*.s
+*.o
+*.cai
+*.eho
+*_wrapper.c
+*_helper.c
+benchmark/benchmark_results*.txt
+cai_converter/cai_converter
+cai_converter/cai_converter_bin
+cai_converter_bin
+benchmark/bench_fib_cpp
+benchmark/bench_sum_cpp
