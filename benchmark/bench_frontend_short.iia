@@ -1,7 +1,0 @@
-Explanation[Application{Benchmark(type:frontend_short)}]
-
-Function_public[main{
-  receive{},
-  Variable[let{int(x:42)}],
-  return(x)
-}]

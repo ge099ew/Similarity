@@ -1,7 +1,0 @@
-Explanation[Application{Test(type:ErrorDetection)}]
-
-Function[main{
-  receive{},
-  Variable[let{int(x:9999999999)}],
-  return(x)
-}]
