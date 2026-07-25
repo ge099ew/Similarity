@@ -259,7 +259,7 @@ CAIバックエンドの最適化・C/C++依存の段階的排除
 - caigen（Go→CAI IR生成）✅
 - cai_conv（CAI→x86_64機械語直接生成）✅
 - asの代替（GCCのアセンブラを排除）✅
-- ldの代替（ELF直接生成）🔶 実装中
+- ldの代替（ELF直接生成）✅
 - APE形式（Cosmopolitan、マルチOS対応）📅
 
 ### Phase 3: エコシステム（📅 未着手）
