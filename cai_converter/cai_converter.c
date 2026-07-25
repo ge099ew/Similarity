@@ -8,6 +8,9 @@
 #include <string.h>
 #include <stdint.h>
 #include <ctype.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
 
 /* ===== 定数 ===== */
 #define MAX_INSTRS   65536
@@ -1007,10 +1010,13 @@ static void write_exe(const char *path){
         if(syms[i].defined) syms[i].off += (int)text_vma; /* VMA = text_vma + offset */
 
     /* patches を適用 */
+    int unresolved = 0;
     for(int i=0;i<patch_count;i++){
         int si=sym_find2(patches[i].sym);
         if(si<0||!syms[si].defined){
-            fprintf(stderr,"未解決シンボル: %s\n",patches[i].sym); continue;
+            fprintf(stderr,"Link Error: Undefined symbol: %s\n",patches[i].sym);
+            unresolved++;
+            continue;
         }
         uint64_t patch_vma = text_vma + patches[i].code_off;
         int32_t rel = (int32_t)(syms[si].off - (patch_vma + 4));
@@ -1063,8 +1069,19 @@ static void write_exe(const char *path){
     fclose(f);
     free(buf);
 
-    char cmd[512]; snprintf(cmd,sizeof(cmd),"chmod +x %s",path);
-    system(cmd);
+    if(unresolved > 0){
+        fprintf(stderr,"Link failed: %d unresolved symbol(s).\n", unresolved);
+        return;
+    }
+
+    /* chmod +x: fchmod syscallで実行権限付与（shell不要） */
+    {
+        int fd = open(path, O_RDONLY);
+        if(fd >= 0){
+            fchmod(fd, 0755);
+            close(fd);
+        }
+    }
 }
 
 /* ===== メイン ===== */
