@@ -24,6 +24,13 @@ func New(tokens []lexer.Token) *Parser {
 }
 
 func (p *Parser) cur() lexer.Token { return p.tokens[p.pos] }
+
+// curPos は現在トークンの位置情報を ast.Pos として返す
+func (p *Parser) curPos() ast.Pos {
+	t := p.tokens[p.pos]
+	return ast.Pos{Line: t.Line, Col: t.Col}
+}
+
 func (p *Parser) peek() lexer.Token {
 	if p.pos+1 < len(p.tokens) {
 		return p.tokens[p.pos+1]
@@ -176,10 +183,11 @@ func (p *Parser) parseStatement() ast.Node {
 
 // Explanation[Application{Game(type:RPG)}]
 func (p *Parser) parseExplanation() *ast.ExplanationNode {
+	pos := p.curPos()
 	p.advance() // skip Explanation
 	p.expect(lexer.TOKEN_LBRACKET)
 
-	node := &ast.ExplanationNode{Args: make(map[string]string)}
+	node := &ast.ExplanationNode{Args: make(map[string]string), Pos: pos}
 	node.Category = p.cur().Literal
 	p.advance()
 
@@ -212,6 +220,7 @@ func (p *Parser) parseExplanation() *ast.ExplanationNode {
 
 // Mutation[variable{int(x:30)}]
 func (p *Parser) parseMutation() *ast.MutationNode {
+	pos := p.curPos()
 	p.advance() // skip Mutation  ← 先にこれ
 	p.expect(lexer.TOKEN_LBRACKET)
 
@@ -222,7 +231,7 @@ func (p *Parser) parseMutation() *ast.MutationNode {
 	}
 	p.expect(lexer.TOKEN_LBRACE)
 
-	node := &ast.MutationNode{}
+	node := &ast.MutationNode{Pos: pos}
 	node.Type = p.cur().Literal
 	p.advance() // int
 	p.expect(lexer.TOKEN_LPAREN)
@@ -240,6 +249,7 @@ func (p *Parser) parseMutation() *ast.MutationNode {
 // Variable[struct{User:String(name), int(age)}]
 // Variable[let{user:User(name:"John", age:25)}]
 func (p *Parser) parseVariable() *ast.VariableNode {
+	pos := p.curPos()
 	p.advance() // skip Variable
 	p.expect(lexer.TOKEN_LBRACKET)
 
@@ -274,11 +284,12 @@ func (p *Parser) parseVariable() *ast.VariableNode {
 			Type:    typeName,
 			Name:    varName,
 			Value:   si,
+			Pos:     pos,
 		}).(*ast.VariableNode)
 		return wrapper
 	}
 
-	node := p.arena.Add(&ast.VariableNode{Mutable: mutable}).(*ast.VariableNode)
+	node := p.arena.Add(&ast.VariableNode{Mutable: mutable, Pos: pos}).(*ast.VariableNode)
 	node.Type = typeName
 	node.Name = varName
 	node.Value = p.parseLiteral()
@@ -350,10 +361,11 @@ func (p *Parser) parseStructInstance() *ast.StructInstanceNode {
 
 // If[check{le(hp,0)}, True[...], False[...]]
 func (p *Parser) parseIf() *ast.IfNode {
+	pos := p.curPos()
 	p.advance() // skip If
 	p.expect(lexer.TOKEN_LBRACKET)
 
-	node := &ast.IfNode{}
+	node := &ast.IfNode{Pos: pos}
 	p.expect(lexer.TOKEN_CHECK)
 	p.expect(lexer.TOKEN_LBRACE)
 	node.Condition = p.parseCondition()
@@ -384,10 +396,11 @@ func (p *Parser) parseIf() *ast.IfNode {
 // Loop[for{int(i:0),lt(i,10),step{1}}, Body[...]]
 // Loop[Count{int(i:10)}, Body[...]]
 func (p *Parser) parseLoop() *ast.LoopNode {
+	pos := p.curPos()
 	p.advance() // skip Loop
 	p.expect(lexer.TOKEN_LBRACKET)
 
-	node := p.arena.Add(&ast.LoopNode{}).(*ast.LoopNode)
+	node := p.arena.Add(&ast.LoopNode{Pos: pos}).(*ast.LoopNode)
 	if p.cur().Type == lexer.TOKEN_FOR {
 		node.Kind = "for"
 		p.advance()
@@ -425,10 +438,11 @@ func (p *Parser) parseLoop() *ast.LoopNode {
 
 // Func[name{receive{...}, 処理, return{...}}] / Func_pub[...]
 func (p *Parser) parseFunc(pub bool) *ast.FuncNode {
+	pos := p.curPos()
 	p.advance() // skip Func
 	p.expect(lexer.TOKEN_LBRACKET)
 
-	node := p.arena.Add(&ast.FuncNode{Public: pub}).(*ast.FuncNode)
+	node := p.arena.Add(&ast.FuncNode{Public: pub, Pos: pos}).(*ast.FuncNode)
 	node.Name = p.cur().Literal
 	p.advance()
 	p.expect(lexer.TOKEN_LBRACE)
@@ -482,6 +496,7 @@ func (p *Parser) parseFunc(pub bool) *ast.FuncNode {
 
 // Error[try{...}, Ok[...], Err[type{...},msg{...}]]
 func (p *Parser) parseError() *ast.ErrorNode {
+	pos := p.curPos()
 	p.advance() // skip Error
 	p.expect(lexer.TOKEN_LBRACKET)
 
@@ -489,14 +504,14 @@ func (p *Parser) parseError() *ast.ErrorNode {
 	if p.cur().Type == lexer.TOKEN_DEF {
 		p.advance()
 		p.expect(lexer.TOKEN_LBRACE)
-		node := &ast.ErrorNode{ErrType: p.cur().Literal}
+		node := &ast.ErrorNode{ErrType: p.cur().Literal, Pos: pos}
 		p.advance()
 		p.expect(lexer.TOKEN_RBRACE)
 		p.expect(lexer.TOKEN_RBRACKET)
 		return node
 	}
 
-	node := p.arena.Add(&ast.ErrorNode{}).(*ast.ErrorNode)
+	node := p.arena.Add(&ast.ErrorNode{Pos: pos}).(*ast.ErrorNode)
 	p.expect(lexer.TOKEN_TRY)
 	p.expect(lexer.TOKEN_LBRACE)
 	node.Try = p.parseBlock()
@@ -543,9 +558,10 @@ func (p *Parser) parseError() *ast.ErrorNode {
 
 // Fatal[type{...}, msg{...}]
 func (p *Parser) parseFatal() *ast.FatalNode {
+	pos := p.curPos()
 	p.advance() // skip Fatal
 	p.expect(lexer.TOKEN_LBRACKET)
-	node := p.arena.Add(&ast.FatalNode{}).(*ast.FatalNode)
+	node := p.arena.Add(&ast.FatalNode{Pos: pos}).(*ast.FatalNode)
 	if p.cur().Type == lexer.TOKEN_IDENT && p.cur().Literal == "type" {
 		p.advance()
 		p.expect(lexer.TOKEN_LBRACE)
@@ -569,9 +585,10 @@ func (p *Parser) parseFatal() *ast.FatalNode {
 
 // Import[discord{token}]
 func (p *Parser) parseImport() *ast.ImportNode {
+	pos := p.curPos()
 	p.advance() // skip Import
 	p.expect(lexer.TOKEN_LBRACKET)
-	node := p.arena.Add(&ast.ImportNode{Module: p.cur().Literal}).(*ast.ImportNode)
+	node := p.arena.Add(&ast.ImportNode{Module: p.cur().Literal, Pos: pos}).(*ast.ImportNode)
 	p.advance()
 	p.expect(lexer.TOKEN_LBRACE)
 	for p.cur().Type != lexer.TOKEN_RBRACE && p.cur().Type != lexer.TOKEN_EOF {
@@ -588,11 +605,12 @@ func (p *Parser) parseImport() *ast.ImportNode {
 
 // Extern[C{lib{"SDL2"}, func{...}}]
 func (p *Parser) parseExtern() *ast.ExternNode {
+	pos := p.curPos()
 	p.advance() // skip Extern
 	p.expect(lexer.TOKEN_LBRACKET)
 	p.advance() // skip C
 	p.expect(lexer.TOKEN_LBRACE)
-	node := p.arena.Add(&ast.ExternNode{}).(*ast.ExternNode)
+	node := p.arena.Add(&ast.ExternNode{Pos: pos}).(*ast.ExternNode)
 	// lib{...}
 	if p.cur().Type == lexer.TOKEN_LIB {
 		p.advance()
@@ -616,9 +634,10 @@ func (p *Parser) parseExtern() *ast.ExternNode {
 
 // call{funcName(args)}
 func (p *Parser) parseCall() *ast.CallNode {
+	pos := p.curPos()
 	p.advance() // skip call
 	p.expect(lexer.TOKEN_LBRACE)
-	node := p.arena.Add(&ast.CallNode{FuncName: p.cur().Literal}).(*ast.CallNode)
+	node := p.arena.Add(&ast.CallNode{FuncName: p.cur().Literal, Pos: pos}).(*ast.CallNode)
 	p.advance()
 	p.expect(lexer.TOKEN_LPAREN)
 	for p.cur().Type != lexer.TOKEN_RPAREN && p.cur().Type != lexer.TOKEN_EOF {
@@ -634,9 +653,10 @@ func (p *Parser) parseCall() *ast.CallNode {
 
 // return{value}
 func (p *Parser) parseReturn() *ast.ReturnNode {
+	pos := p.curPos()
 	p.advance() // skip return
 	p.expect(lexer.TOKEN_LPAREN)
-	node := p.arena.Add(&ast.ReturnNode{}).(*ast.ReturnNode)
+	node := p.arena.Add(&ast.ReturnNode{Pos: pos}).(*ast.ReturnNode)
 	if p.cur().Type != lexer.TOKEN_RPAREN {
 		node.Value = p.parseLiteral()
 	}
@@ -694,16 +714,17 @@ func (p *Parser) parseLiteral() ast.Node {
 	}
 	tok := p.cur()
 	p.advance()
-	return &ast.LiteralNode{Kind: string(tok.Type), Value: tok.Literal, Line: tok.Line}
+	return &ast.LiteralNode{Kind: string(tok.Type), Value: tok.Literal, Line: tok.Line, Pos: ast.Pos{Line: tok.Line, Col: tok.Col}}
 }
 
 // 演算式をパース: +{int(a, b)} → ExprNode{Op:"+", Type:"int", Left:a, Right:b}
 func (p *Parser) parseExpr() *ast.ExprNode {
+	pos := p.curPos()
 	op := p.cur().Literal
 	p.advance() // skip + - * /
 	p.expect(lexer.TOKEN_LBRACE)
 
-	node := p.arena.Add(&ast.ExprNode{Op: op}).(*ast.ExprNode)
+	node := p.arena.Add(&ast.ExprNode{Op: op, Pos: pos}).(*ast.ExprNode)
 
 	// 型名 (int, float, ...) を読む
 	node.Type = p.cur().Literal
@@ -741,6 +762,7 @@ func (p *Parser) parseArg() ast.Node {
 
 // le(hp,0) / lt(i,10) / eq(a:10)
 func (p *Parser) parseCondition() *ast.ConditionNode {
+	pos := p.curPos()
 	op := p.cur().Literal
 	p.advance()
 	p.expect(lexer.TOKEN_LPAREN)
@@ -750,15 +772,16 @@ func (p *Parser) parseCondition() *ast.ConditionNode {
 	right := p.cur().Literal
 	p.advance()
 	p.expect(lexer.TOKEN_RPAREN)
-	return &ast.ConditionNode{Op: op, Left: left, Right: right}
+	return &ast.ConditionNode{Op: op, Left: left, Right: right, Pos: pos}
 }
 
 // Async[{処理}]
 func (p *Parser) parseAsync() *ast.AsyncNode {
+	pos := p.curPos()
 	p.advance() // skip Async
 	p.expect(lexer.TOKEN_LBRACKET)
 	p.expect(lexer.TOKEN_LBRACE)
-	node := p.arena.Add(&ast.AsyncNode{}).(*ast.AsyncNode)
+	node := p.arena.Add(&ast.AsyncNode{Pos: pos}).(*ast.AsyncNode)
 	node.Body = p.parseBlock()
 	p.expect(lexer.TOKEN_RBRACE)
 	p.expect(lexer.TOKEN_RBRACKET)
@@ -767,9 +790,10 @@ func (p *Parser) parseAsync() *ast.AsyncNode {
 
 // Await[task]
 func (p *Parser) parseAwait() *ast.AwaitNode {
+	pos := p.curPos()
 	p.advance() // skip Await
 	p.expect(lexer.TOKEN_LBRACKET)
-	node := p.arena.Add(&ast.AwaitNode{Target: p.cur().Literal}).(*ast.AwaitNode)
+	node := p.arena.Add(&ast.AwaitNode{Target: p.cur().Literal, Pos: pos}).(*ast.AwaitNode)
 	p.advance()
 	p.expect(lexer.TOKEN_RBRACKET)
 	return node
@@ -777,10 +801,11 @@ func (p *Parser) parseAwait() *ast.AwaitNode {
 
 // GPU[{処理}]
 func (p *Parser) parseGPU() *ast.GPUNode {
+	pos := p.curPos()
 	p.advance() // skip GPU
 	p.expect(lexer.TOKEN_LBRACKET)
 	p.expect(lexer.TOKEN_LBRACE)
-	node := p.arena.Add(&ast.GPUNode{}).(*ast.GPUNode)
+	node := p.arena.Add(&ast.GPUNode{Pos: pos}).(*ast.GPUNode)
 	node.Body = p.parseBlock()
 	p.expect(lexer.TOKEN_RBRACE)
 	p.expect(lexer.TOKEN_RBRACKET)
@@ -789,12 +814,13 @@ func (p *Parser) parseGPU() *ast.GPUNode {
 
 // Mem[risk{...}] / Mem[Raw{...}]
 func (p *Parser) parseMem() *ast.RawMemNode {
+	pos := p.curPos()
 	p.advance() // skip Mem
 	p.expect(lexer.TOKEN_LBRACKET)
 	p.advance() // skip risk/Raw
 	p.expect(lexer.TOKEN_LBRACE)
 	lineStart := p.cur().Line
-	node := p.arena.Add(&ast.RawMemNode{}).(*ast.RawMemNode)
+	node := p.arena.Add(&ast.RawMemNode{Pos: pos}).(*ast.RawMemNode)
 	node.LineStart = lineStart
 	node.Body = p.parseBlock()
 	node.LineEnd = p.cur().Line
@@ -840,35 +866,39 @@ func collectRiskOps(body []ast.Node) []string {
 
 // share(x) → Async間で共有する変数を明示
 func (p *Parser) parseShare() *ast.ShareNode {
+	pos := p.curPos()
 	p.advance() // skip share
 	p.expect(lexer.TOKEN_LPAREN)
 	name := p.cur().Literal
 	p.advance()
 	p.expect(lexer.TOKEN_RPAREN)
-	return &ast.ShareNode{Name: name}
+	return &ast.ShareNode{Name: name, Pos: pos}
 }
 
 // break{}
 func (p *Parser) parseBreak() *ast.BreakNode {
+	pos := p.curPos()
 	p.advance() // skip break
 	p.expect(lexer.TOKEN_LBRACE)
 	p.expect(lexer.TOKEN_RBRACE)
-	return &ast.BreakNode{}
+	return &ast.BreakNode{Pos: pos}
 }
 
 // continue{}
 func (p *Parser) parseContinue() *ast.ContinueNode {
+	pos := p.curPos()
 	p.advance() // skip continue
 	p.expect(lexer.TOKEN_LBRACE)
 	p.expect(lexer.TOKEN_RBRACE)
-	return &ast.ContinueNode{}
+	return &ast.ContinueNode{Pos: pos}
 }
 
 // cast{int(x)}
 func (p *Parser) parseCast() *ast.CastNode {
+	pos := p.curPos()
 	p.advance() // skip cast
 	p.expect(lexer.TOKEN_LBRACE)
-	node := p.arena.Add(&ast.CastNode{}).(*ast.CastNode)
+	node := p.arena.Add(&ast.CastNode{Pos: pos}).(*ast.CastNode)
 	node.Type = p.cur().Literal
 	p.advance()
 	p.expect(lexer.TOKEN_LPAREN)
@@ -880,9 +910,10 @@ func (p *Parser) parseCast() *ast.CastNode {
 
 // index{arr(i)}
 func (p *Parser) parseIndex() *ast.IndexNode {
+	pos := p.curPos()
 	p.advance() // skip index
 	p.expect(lexer.TOKEN_LBRACE)
-	node := p.arena.Add(&ast.IndexNode{}).(*ast.IndexNode)
+	node := p.arena.Add(&ast.IndexNode{Pos: pos}).(*ast.IndexNode)
 	node.Name = p.cur().Literal
 	p.advance()
 	p.expect(lexer.TOKEN_LPAREN)
@@ -894,9 +925,10 @@ func (p *Parser) parseIndex() *ast.IndexNode {
 
 // addr{x}
 func (p *Parser) parseAddress() *ast.AddressNode {
+	pos := p.curPos()
 	p.advance() // skip addr
 	p.expect(lexer.TOKEN_LBRACE)
-	node := p.arena.Add(&ast.AddressNode{Name: p.cur().Literal}).(*ast.AddressNode)
+	node := p.arena.Add(&ast.AddressNode{Name: p.cur().Literal, Pos: pos}).(*ast.AddressNode)
 	p.advance()
 	p.expect(lexer.TOKEN_RBRACE)
 	return node
@@ -904,9 +936,10 @@ func (p *Parser) parseAddress() *ast.AddressNode {
 
 // deref{ptr}
 func (p *Parser) parseDeref() *ast.DerefNode {
+	pos := p.curPos()
 	p.advance() // skip deref
 	p.expect(lexer.TOKEN_LBRACE)
-	node := p.arena.Add(&ast.DerefNode{Name: p.cur().Literal}).(*ast.DerefNode)
+	node := p.arena.Add(&ast.DerefNode{Name: p.cur().Literal, Pos: pos}).(*ast.DerefNode)
 	p.advance()
 	p.expect(lexer.TOKEN_RBRACE)
 	return node

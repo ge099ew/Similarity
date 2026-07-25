@@ -1,9 +1,16 @@
 // Package ast: .iia の構文木
 package ast
 
+// Pos はソースコード上の位置情報
+type Pos struct {
+	Line int // 行番号（1始まり）
+	Col  int // 列番号（1始まり）
+}
+
 // Node ASTの全ノードが実装するインターフェース
 type Node interface {
 	TokenLiteral() string
+	Position() Pos // ← 位置情報（LSP対応）
 }
 
 // Program ルートノード
@@ -17,6 +24,7 @@ type Program struct {
 type ExplanationNode struct {
 	Category string            // Application / Bridge / System / Module
 	Args     map[string]string // type:RPG, name:Minecraft ...
+	Pos      Pos
 }
 
 // VariableNode 変数宣言
@@ -26,6 +34,7 @@ type VariableNode struct {
 	Type    string // int, float, String, Box_int ...
 	Name    string
 	Value   Node
+	Pos     Pos
 }
 
 // IfNode 条件分岐
@@ -34,14 +43,17 @@ type IfNode struct {
 	Condition Node
 	True      []Node
 	False     []Node
+	Pos       Pos
 }
 
 // ReturnNode return
 type ReturnNode struct {
 	Value Node
+	Pos   Pos
 }
 
 func (r *ReturnNode) TokenLiteral() string { return "return" }
+func (r *ReturnNode) Position() Pos        { return r.Pos }
 
 // LoopNode ループ
 // Loop[for{int(i:0), lt(i,10), step{1}}, Body[...]]
@@ -51,6 +63,7 @@ type LoopNode struct {
 	Condition Node
 	Step      int
 	Body      []Node
+	Pos       Pos
 }
 
 // MutationNode
@@ -58,9 +71,11 @@ type MutationNode struct {
 	Type  string
 	Name  string
 	Value Node
+	Pos   Pos
 }
 
 func (m *MutationNode) TokenLiteral() string { return "Mutation" }
+func (m *MutationNode) Position() Pos        { return m.Pos }
 
 // FuncNode 関数定義
 // Func[名前{receive{...}, 処理, return{...}}]
@@ -70,6 +85,7 @@ type FuncNode struct {
 	Params  []VariableNode
 	Body    []Node
 	Returns Node
+	Pos     Pos
 }
 
 // CallNode 関数呼び出し
@@ -77,6 +93,7 @@ type FuncNode struct {
 type CallNode struct {
 	FuncName string
 	Args     []Node
+	Pos      Pos
 }
 
 // ErrorNode エラーハンドリング
@@ -88,6 +105,7 @@ type ErrorNode struct {
 	ErrType string
 	Msg     string
 	Pass    bool // pass{} = 呼び出し元へ投げる
+	Pos     Pos
 }
 
 // FatalNode 回復不能エラー
@@ -95,6 +113,7 @@ type ErrorNode struct {
 type FatalNode struct {
 	ErrType string
 	Msg     string
+	Pos     Pos
 }
 
 // ExternNode C外部関数宣言
@@ -102,6 +121,7 @@ type FatalNode struct {
 type ExternNode struct {
 	Libs  []string
 	Funcs []FuncNode
+	Pos   Pos
 }
 
 // ImportNode モジュール読み込み
@@ -109,25 +129,38 @@ type ExternNode struct {
 type ImportNode struct {
 	Module  string
 	Symbols []string // 空なら全部
+	Pos     Pos
 }
 
 func (p *Program) TokenLiteral() string         { return "" }
+func (p *Program) Position() Pos                { return Pos{} }
 func (e *ExplanationNode) TokenLiteral() string { return "Explanation" }
+func (e *ExplanationNode) Position() Pos        { return e.Pos }
 func (v *VariableNode) TokenLiteral() string    { return "Variable" }
+func (v *VariableNode) Position() Pos           { return v.Pos }
 func (i *IfNode) TokenLiteral() string          { return "If" }
+func (i *IfNode) Position() Pos                 { return i.Pos }
 func (l *LoopNode) TokenLiteral() string        { return "Loop" }
+func (l *LoopNode) Position() Pos               { return l.Pos }
 func (f *FuncNode) TokenLiteral() string        { return "Func" }
+func (f *FuncNode) Position() Pos               { return f.Pos }
 func (c *CallNode) TokenLiteral() string        { return "call" }
+func (c *CallNode) Position() Pos               { return c.Pos }
 func (e *ErrorNode) TokenLiteral() string       { return "Error" }
+func (e *ErrorNode) Position() Pos              { return e.Pos }
 func (f *FatalNode) TokenLiteral() string       { return "Fatal" }
+func (f *FatalNode) Position() Pos              { return f.Pos }
 func (e *ExternNode) TokenLiteral() string      { return "Extern" }
+func (e *ExternNode) Position() Pos             { return e.Pos }
 func (i *ImportNode) TokenLiteral() string      { return "Import" }
+func (i *ImportNode) Position() Pos             { return i.Pos }
 
 // LiteralNode リテラル値（int, float, bool, String）
 type LiteralNode struct {
 	Kind  string // INT_LIT / FLOAT_LIT / BOOL_LIT / STRING_LIT / IDENT
 	Value string
 	Line  int
+	Pos   Pos
 }
 
 // ConditionNode 比較条件（le, lt, eq など）
@@ -135,10 +168,13 @@ type ConditionNode struct {
 	Op    string // le / lt / eq / ge / gt / ne
 	Left  string
 	Right string
+	Pos   Pos
 }
 
 func (l *LiteralNode) TokenLiteral() string   { return l.Value }
+func (l *LiteralNode) Position() Pos          { return l.Pos }
 func (c *ConditionNode) TokenLiteral() string { return c.Op }
+func (c *ConditionNode) Position() Pos        { return c.Pos }
 
 // ExprNode 演算式（+{int(a,b)}, *{int(a,b)} など）
 type ExprNode struct {
@@ -146,38 +182,48 @@ type ExprNode struct {
 	Left  Node
 	Right Node
 	Type  string // int / float など
+	Pos   Pos
 }
 
 func (e *ExprNode) TokenLiteral() string { return e.Op }
+func (e *ExprNode) Position() Pos        { return e.Pos }
 
 // 非同期
 // Async[{処理}]
 type AsyncNode struct {
 	Body []Node
+	Pos  Pos
 }
 
 func (a *AsyncNode) TokenLiteral() string { return "Async" }
+func (a *AsyncNode) Position() Pos        { return a.Pos }
 
 // share(x) → Async間で共有する変数を明示
 type ShareNode struct {
 	Name string
+	Pos  Pos
 }
 
 func (s *ShareNode) TokenLiteral() string { return "share" }
+func (s *ShareNode) Position() Pos        { return s.Pos }
 
 // Await[task]
 type AwaitNode struct {
 	Target string
+	Pos    Pos
 }
 
 func (a *AwaitNode) TokenLiteral() string { return "Await" }
+func (a *AwaitNode) Position() Pos        { return a.Pos }
 
 // GPU[{処理}]
 type GPUNode struct {
 	Body []Node
+	Pos  Pos
 }
 
 func (g *GPUNode) TokenLiteral() string { return "GPU" }
+func (g *GPUNode) Position() Pos        { return g.Pos }
 
 // メモリ・ポインタ
 // Mem[risk{...}] / Mem[Raw{...}]
@@ -186,54 +232,70 @@ type RawMemNode struct {
 	LineStart int
 	LineEnd   int
 	Ops       []string // 使用されてるunsafe操作（deref, addr等）
+	Pos       Pos
 }
 
 func (r *RawMemNode) TokenLiteral() string { return "Mem" }
+func (r *RawMemNode) Position() Pos        { return r.Pos }
 
 // ポインタのアドレス取得
 // addr{x} → xのアドレスを取得
 type AddressNode struct {
 	Name string
+	Pos  Pos
 }
 
 func (a *AddressNode) TokenLiteral() string { return "addr" }
+func (a *AddressNode) Position() Pos        { return a.Pos }
 
 // ポインタの参照外し
 // deref{ptr} → ptrが指す値を取得
 type DerefNode struct {
 	Name string
+	Pos  Pos
 }
 
 func (d *DerefNode) TokenLiteral() string { return "deref" }
+func (d *DerefNode) Position() Pos        { return d.Pos }
 
 // 型キャスト
 // cast{int(x)} → xをintにキャスト
 type CastNode struct {
 	Type  string
 	Value Node
+	Pos   Pos
 }
 
 func (c *CastNode) TokenLiteral() string { return "cast" }
+func (c *CastNode) Position() Pos        { return c.Pos }
 
 // 配列アクセス
 // index{arr(i)} → arr[i]
 type IndexNode struct {
 	Name  string
 	Index Node
+	Pos   Pos
 }
 
 func (i *IndexNode) TokenLiteral() string { return "index" }
+func (i *IndexNode) Position() Pos        { return i.Pos }
 
 // ループ制御
 // break{}
-type BreakNode struct{}
+type BreakNode struct {
+	Pos Pos
+}
 
 func (b *BreakNode) TokenLiteral() string { return "break" }
+func (b *BreakNode) Position() Pos        { return b.Pos }
 
 // continue{}
-type ContinueNode struct{}
+type ContinueNode struct {
+	Pos Pos
+}
 
 func (c *ContinueNode) TokenLiteral() string { return "continue" }
+func (c *ContinueNode) Position() Pos        { return c.Pos }
 
 // ===== struct =====
 
@@ -249,9 +311,11 @@ type StructField struct {
 type StructDefNode struct {
 	Name   string        // 構造体名 e.g. "User"
 	Fields []StructField // フィールド一覧
+	Pos    Pos
 }
 
 func (s *StructDefNode) TokenLiteral() string { return "struct" }
+func (s *StructDefNode) Position() Pos        { return s.Pos }
 
 // FieldValue: structインスタンス生成時の各フィールドの値
 // e.g. name:"John"
@@ -265,6 +329,8 @@ type FieldValue struct {
 type StructInstanceNode struct {
 	TypeName string       // 構造体型名 e.g. "User"
 	Fields   []FieldValue // フィールドと値の対
+	Pos      Pos
 }
 
 func (s *StructInstanceNode) TokenLiteral() string { return "StructInstance" }
+func (s *StructInstanceNode) Position() Pos        { return s.Pos }

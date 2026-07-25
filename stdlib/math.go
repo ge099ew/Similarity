@@ -69,14 +69,17 @@ endfunc
 // AvailableLibs: 利用可能なライブラリ一覧（QBE IR）
 var AvailableLibs = map[string]string{
 	"math": MathLib,
+	"io":   IoLib,
 }
 
 // AvailableLibsC: 利用可能なライブラリ一覧（Cフォールバック）
 var AvailableLibsC = map[string]string{
 	"math": MathLibC,
+	"io":   IoLibC,
 }
 
 // AvailableLibsCAI: 利用可能なライブラリ一覧（CAI）
 var AvailableLibsCAI = map[string]string{
 	"math": MathLibCAI,
+	"io":   IoLibCAI,
 }

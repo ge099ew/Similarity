@@ -144,21 +144,28 @@ type Token struct {
 	Type    TokenType
 	Literal string
 	Line    int
+	Col     int // 列番号（1始まり）
 }
 
 func (t Token) String() string {
-	return fmt.Sprintf("[%s:%q line:%d]", t.Type, t.Literal, t.Line)
+	return fmt.Sprintf("[%s:%q line:%d col:%d]", t.Type, t.Literal, t.Line, t.Col)
 }
 
 type Lexer struct {
-	input  string
-	pos    int
-	line   int
-	Errors []string
+	input     string
+	pos       int
+	line      int
+	lineStart int // 現在行の開始pos（col計算用）
+	Errors    []string
 }
 
 func New(input string) *Lexer {
-	return &Lexer{input: input, pos: 0, line: 1}
+	return &Lexer{input: input, pos: 0, line: 1, lineStart: 0}
+}
+
+// col は現在位置の列番号（1始まり）を返す
+func (l *Lexer) col() int {
+	return l.pos - l.lineStart + 1
 }
 
 func (l *Lexer) Tokenize() []Token {
@@ -177,51 +184,52 @@ func (l *Lexer) nextToken() Token {
 	l.skipWhitespaceAndComments()
 
 	if l.pos >= len(l.input) {
-		return Token{TOKEN_EOF, "", l.line}
+		return Token{TOKEN_EOF, "", l.line, l.col()}
 	}
 
 	ch := l.input[l.pos]
 
+	c := l.col()
 	switch ch {
 	case '[':
 		l.pos++
-		return Token{TOKEN_LBRACKET, "[", l.line}
+		return Token{TOKEN_LBRACKET, "[", l.line, c}
 	case ']':
 		l.pos++
-		return Token{TOKEN_RBRACKET, "]", l.line}
+		return Token{TOKEN_RBRACKET, "]", l.line, c}
 	case '{':
 		l.pos++
-		return Token{TOKEN_LBRACE, "{", l.line}
+		return Token{TOKEN_LBRACE, "{", l.line, c}
 	case '}':
 		l.pos++
-		return Token{TOKEN_RBRACE, "}", l.line}
+		return Token{TOKEN_RBRACE, "}", l.line, c}
 	case '(':
 		l.pos++
-		return Token{TOKEN_LPAREN, "(", l.line}
+		return Token{TOKEN_LPAREN, "(", l.line, c}
 	case ')':
 		l.pos++
-		return Token{TOKEN_RPAREN, ")", l.line}
+		return Token{TOKEN_RPAREN, ")", l.line, c}
 	case ',':
 		l.pos++
-		return Token{TOKEN_COMMA, ",", l.line}
+		return Token{TOKEN_COMMA, ",", l.line, c}
 	case ':':
 		l.pos++
-		return Token{TOKEN_COLON, ":", l.line}
+		return Token{TOKEN_COLON, ":", l.line, c}
 	case ';':
 		l.pos++
-		return Token{TOKEN_SEMI, ";", l.line}
+		return Token{TOKEN_SEMI, ";", l.line, c}
 	case '+':
 		l.pos++
-		return Token{TOKEN_PLUS, "+", l.line}
+		return Token{TOKEN_PLUS, "+", l.line, c}
 	case '-':
 		l.pos++
-		return Token{TOKEN_MINUS, "-", l.line}
+		return Token{TOKEN_MINUS, "-", l.line, c}
 	case '*':
 		l.pos++
-		return Token{TOKEN_STAR, "*", l.line}
+		return Token{TOKEN_STAR, "*", l.line, c}
 	case '/':
 		l.pos++
-		return Token{TOKEN_SLASH, "/", l.line}
+		return Token{TOKEN_SLASH, "/", l.line, c}
 	case '"':
 		return l.readString()
 	}
@@ -241,6 +249,7 @@ func (l *Lexer) nextToken() Token {
 }
 
 func (l *Lexer) readString() Token {
+	startCol := l.col()
 	l.pos++ // skip "
 	start := l.pos
 	for {
@@ -263,10 +272,11 @@ func (l *Lexer) readString() Token {
 	if l.pos < len(l.input) && l.input[l.pos] == '"' {
 		l.pos++ // skip closing "
 	}
-	return Token{TOKEN_STRING_LIT, val, l.line}
+	return Token{TOKEN_STRING_LIT, val, l.line, startCol}
 }
 
 func (l *Lexer) readNumber() Token {
+	startCol := l.col()
 	start := l.pos
 	isFloat := false
 	for l.pos < len(l.input) && (isDigit(l.input[l.pos]) || l.input[l.pos] == '.') {
@@ -277,12 +287,13 @@ func (l *Lexer) readNumber() Token {
 	}
 	lit := l.input[start:l.pos]
 	if isFloat {
-		return Token{TOKEN_FLOAT_LIT, lit, l.line}
+		return Token{TOKEN_FLOAT_LIT, lit, l.line, startCol}
 	}
-	return Token{TOKEN_INT_LIT, lit, l.line}
+	return Token{TOKEN_INT_LIT, lit, l.line, startCol}
 }
 
 func (l *Lexer) readIdentOrKeyword() Token {
+	startCol := l.col()
 	start := l.pos
 	for l.pos < len(l.input) {
 		ch := l.input[l.pos]
@@ -295,10 +306,10 @@ func (l *Lexer) readIdentOrKeyword() Token {
 	// 長さ2未満はキーワードなし（最短は"If"の2文字）
 	if len(lit) >= 2 {
 		if tt, ok := keywords[lit]; ok {
-			return Token{tt, lit, l.line}
+			return Token{tt, lit, l.line, startCol}
 		}
 	}
-	return Token{TOKEN_IDENT, lit, l.line}
+	return Token{TOKEN_IDENT, lit, l.line, startCol}
 }
 
 func (l *Lexer) skipWhitespaceAndComments() {
@@ -307,6 +318,7 @@ func (l *Lexer) skipWhitespaceAndComments() {
 		if ch == '\n' {
 			l.line++
 			l.pos++
+			l.lineStart = l.pos
 		} else if ch == ' ' || ch == '\t' || ch == '\r' {
 			l.pos++
 		} else if l.pos+1 < len(l.input) && ch == '/' && l.input[l.pos+1] == '/' {

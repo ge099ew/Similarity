@@ -1,0 +1,20 @@
+Import[io{}]
+Import[math{}]
+
+Function[main{
+    Variable[let{int(a:42)}],
+    Variable[let{int(b:-{int(0:7)})}],
+    Variable[let{int(c:0)}],
+    call{print_int(a)},
+    call{newline()},
+    call{print_int(b)},
+    call{newline()},
+    call{print_int(c)},
+    call{newline()},
+    call{print_string("hello from Similarity")},
+    call{newline()},
+    Variable[let{int(big:1000000)}],
+    call{print_int(big)},
+    call{newline()},
+    return(0)
+}]
