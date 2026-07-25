@@ -698,8 +698,18 @@ func (p *Parser) parseTypedValue() *ast.VariableNode {
 // リテラル値または演算式をパース
 func (p *Parser) parseLiteral() ast.Node {
 	// 演算式 +{...} -{...} *{...} /{...}
+	// ただし -5 や -3.14 のような負数リテラルは演算式ではなくリテラルとして扱う
 	switch p.cur().Type {
-	case lexer.TOKEN_PLUS, lexer.TOKEN_MINUS, lexer.TOKEN_STAR, lexer.TOKEN_SLASH:
+	case lexer.TOKEN_MINUS:
+		next := p.peek()
+		if next.Type == lexer.TOKEN_INT_LIT || next.Type == lexer.TOKEN_FLOAT_LIT {
+			p.advance() // skip -
+			tok := p.cur()
+			p.advance()
+			return &ast.LiteralNode{Kind: string(tok.Type), Value: "-" + tok.Literal, Line: tok.Line, Pos: ast.Pos{Line: tok.Line, Col: tok.Col}}
+		}
+		return p.parseExpr()
+	case lexer.TOKEN_PLUS, lexer.TOKEN_STAR, lexer.TOKEN_SLASH:
 		return p.parseExpr()
 	case lexer.TOKEN_CALL:
 		return p.parseCall()
@@ -752,7 +762,16 @@ func (p *Parser) parseExpr() *ast.ExprNode {
 // 演算子の引数をパース: 識別子またはネストした演算式
 func (p *Parser) parseArg() ast.Node {
 	switch p.cur().Type {
-	case lexer.TOKEN_PLUS, lexer.TOKEN_MINUS, lexer.TOKEN_STAR, lexer.TOKEN_SLASH:
+	case lexer.TOKEN_MINUS:
+		next := p.peek()
+		if next.Type == lexer.TOKEN_INT_LIT || next.Type == lexer.TOKEN_FLOAT_LIT {
+			p.advance() // skip -
+			tok := p.cur()
+			p.advance()
+			return &ast.LiteralNode{Kind: string(tok.Type), Value: "-" + tok.Literal}
+		}
+		return p.parseExpr()
+	case lexer.TOKEN_PLUS, lexer.TOKEN_STAR, lexer.TOKEN_SLASH:
 		return p.parseExpr()
 	}
 	tok := p.cur()
