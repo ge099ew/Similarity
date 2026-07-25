@@ -222,7 +222,7 @@ gcc -O2 -o cai_conv cai_converter/cai_converter.c
 | CAI IR | ✅ |
 | CAI変換器（x86_64直接生成） | ✅ |
 | asの代替（機械語直接生成） | ✅ |
-| ldの代替（ELF直接生成） | 🔶 実装中 |
+| ldの代替（ELF直接生成） | ✅ |
 | 標準ライブラリ拡張 | 🔶 未着手 |
 | 各言語互換性レイヤー | 🔶 未着手 |
 | GPU本実装 | 🔶 CAI安定後 |
