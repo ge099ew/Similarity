@@ -15,12 +15,18 @@ import (
 
 type CheckError struct {
 	Line    int
+	Col     int
 	Message string
 	Code    string
 }
 
 func (e *CheckError) Error() string {
-	return fmt.Sprintf("TypeCheck Error: %s (%s)", e.Message, e.Code)
+	if e.Line > 0 && e.Col > 0 {
+		return fmt.Sprintf("%d:%d: TypeCheck Error [%s]: %s", e.Line, e.Col, e.Code, e.Message)
+	} else if e.Line > 0 {
+		return fmt.Sprintf("%d: TypeCheck Error [%s]: %s", e.Line, e.Code, e.Message)
+	}
+	return fmt.Sprintf("TypeCheck Error [%s]: %s", e.Code, e.Message)
 }
 
 // ===== 型情報 =====
@@ -117,7 +123,11 @@ func New() *Checker {
 }
 
 func (c *Checker) addError(line int, code, msg string) {
-	c.errors = append(c.errors, &CheckError{Line: line, Message: msg, Code: code})
+	c.errors = append(c.errors, &CheckError{Line: line, Col: 0, Message: msg, Code: code})
+}
+
+func (c *Checker) addErrorPos(pos ast.Pos, code, msg string) {
+	c.errors = append(c.errors, &CheckError{Line: pos.Line, Col: pos.Col, Message: msg, Code: code})
 }
 
 // Check: プログラム全体をチェックしてエラー一覧を返す
@@ -175,7 +185,7 @@ func (c *Checker) checkNode(node ast.Node) TypeInfo {
 	case *ast.ShareNode:
 		// share(x): 宣言済み変数かチェック
 		if _, ok := c.vars[n.Name]; !ok {
-			c.addError(0, "TC5001", fmt.Sprintf(
+			c.addErrorPos(n.Position(), "TC5001", fmt.Sprintf(
 				"share: '%s' は未宣言の変数です。Asyncブロックより前に宣言してください",
 				n.Name,
 			))
@@ -183,7 +193,7 @@ func (c *Checker) checkNode(node ast.Node) TypeInfo {
 	case *ast.AwaitNode:
 		// Await対象の変数が存在するか
 		if _, ok := c.vars[n.Target]; !ok {
-			c.addError(0, "TC3001", fmt.Sprintf("Await: '%s' は未宣言の変数です", n.Target))
+			c.addErrorPos(n.Position(), "TC3001", fmt.Sprintf("Await: '%s' は未宣言の変数です", n.Target))
 		}
 	case *ast.FatalNode:
 		// Fatal は常にOK（回復不能エラー）
@@ -215,7 +225,7 @@ func (c *Checker) checkAsync(n *ast.AsyncNode) {
 		if mut, ok := s.(*ast.MutationNode); ok {
 			if _, shared := sharedVars[mut.Name]; !shared {
 				// share宣言なしにAsyncブロック内でMutationしようとしている
-				c.addError(0, "TC5002", fmt.Sprintf(
+				c.addErrorPos(mut.Position(), "TC5002", fmt.Sprintf(
 					"データ競合: '%s' はAsyncブロック内で変更されていますが share(%s) が宣言されていません",
 					mut.Name, mut.Name,
 				))
@@ -266,7 +276,7 @@ func (c *Checker) checkVariable(v *ast.VariableNode) TypeInfo {
 
 		// 型ミスマッチチェック（KindUnknown=変数参照は許容）
 		if valType.Kind != KindUnknown && !declType.CompatibleWith(valType) {
-			c.addError(0, "TC2001", fmt.Sprintf(
+			c.addErrorPos(v.Position(), "TC2001", fmt.Sprintf(
 				"型ミスマッチ: '%s' は %s 型ですが %s 型の値を代入しようとしています",
 				v.Name, declType.String(), valType.String(),
 			))
@@ -290,7 +300,7 @@ func (c *Checker) checkVariable(v *ast.VariableNode) TypeInfo {
 func (c *Checker) checkMutation(m *ast.MutationNode) TypeInfo {
 	varType, exists := c.vars[m.Name]
 	if !exists {
-		c.addError(0, "TC2002", fmt.Sprintf("Mutation: '%s' は未宣言の変数です", m.Name))
+		c.addErrorPos(m.Position(), "TC2002", fmt.Sprintf("Mutation: '%s' は未宣言の変数です", m.Name))
 		return TypeInfo{Kind: KindUnknown}
 	}
 
@@ -299,7 +309,7 @@ func (c *Checker) checkMutation(m *ast.MutationNode) TypeInfo {
 
 	newType := typeFromString(m.Type)
 	if !varType.CompatibleWith(newType) {
-		c.addError(0, "TC2003", fmt.Sprintf(
+		c.addErrorPos(m.Position(), "TC2003", fmt.Sprintf(
 			"型ミスマッチ: '%s' は %s 型ですが %s 型で上書きしようとしています",
 			m.Name, varType.String(), newType.String(),
 		))
@@ -324,7 +334,7 @@ func (c *Checker) checkIf(n *ast.IfNode) TypeInfo {
 		rightType := c.resolveIdentType(cond.Right)
 		if leftType.Kind != KindUnknown && rightType.Kind != KindUnknown {
 			if !leftType.CompatibleWith(rightType) {
-				c.addError(0, "TC2004", fmt.Sprintf(
+				c.addErrorPos(n.Position(), "TC2004", fmt.Sprintf(
 					"比較型ミスマッチ: %s(%s) と %s(%s) は比較できません",
 					cond.Left, leftType.String(), cond.Right, rightType.String(),
 				))
@@ -333,13 +343,13 @@ func (c *Checker) checkIf(n *ast.IfNode) TypeInfo {
 
 		// null許容型のnullチェックなしアクセス検出
 		if leftType.Nullable {
-			c.addError(0, "TC1001", fmt.Sprintf(
+			c.addErrorPos(n.Position(), "TC1001", fmt.Sprintf(
 				"null安全: '%s' はnull許容型です。nullチェックなしで比較しています",
 				cond.Left,
 			))
 		}
 		if rightType.Nullable {
-			c.addError(0, "TC1001", fmt.Sprintf(
+			c.addErrorPos(n.Position(), "TC1001", fmt.Sprintf(
 				"null安全: '%s' はnull許容型です。nullチェックなしで比較しています",
 				cond.Right,
 			))
@@ -387,7 +397,7 @@ func (c *Checker) checkExpr(n *ast.ExprNode) TypeInfo {
 	// 両辺の型チェック（unknownは変数参照なので許容）
 	if leftType.Kind != KindUnknown && rightType.Kind != KindUnknown {
 		if !leftType.CompatibleWith(rightType) {
-			c.addError(0, "TC2005", fmt.Sprintf(
+			c.addErrorPos(n.Position(), "TC2005", fmt.Sprintf(
 				"演算型ミスマッチ: %s と %s は演算できません（明示的castが必要です）",
 				leftType.String(), rightType.String(),
 			))
@@ -431,13 +441,13 @@ func (c *Checker) checkCast(n *ast.CastNode) TypeInfo {
 
 	// 数値型間のcastのみ許容
 	if srcType.Kind != KindUnknown && !srcType.IsNumeric() {
-		c.addError(0, "TC2006", fmt.Sprintf(
+		c.addErrorPos(n.Position(), "TC2006", fmt.Sprintf(
 			"cast: %s は数値型ではないためcastできません",
 			srcType.String(),
 		))
 	}
 	if !dstType.IsNumeric() {
-		c.addError(0, "TC2007", fmt.Sprintf(
+		c.addErrorPos(n.Position(), "TC2007", fmt.Sprintf(
 			"cast: %s へのcastはサポートされていません",
 			dstType.String(),
 		))
@@ -451,7 +461,7 @@ func (c *Checker) checkCast(n *ast.CastNode) TypeInfo {
 func (c *Checker) checkDeref(n *ast.DerefNode) TypeInfo {
 	// risk{}の外でのderefは警告
 	if !c.inRisk {
-		c.addError(0, "TC3002", fmt.Sprintf(
+		c.addErrorPos(n.Position(), "TC3002", fmt.Sprintf(
 			"ポインタ: deref{%s} はMem[risk{}]の外で使用されています。意図的な場合はMem[risk{...}]で囲んでください",
 			n.Name,
 		))
@@ -464,13 +474,13 @@ func (c *Checker) checkDeref(n *ast.DerefNode) TypeInfo {
 func (c *Checker) checkIndex(n *ast.IndexNode) TypeInfo {
 	arrType, ok := c.vars[n.Name]
 	if !ok {
-		c.addError(0, "TC2008", fmt.Sprintf("index: '%s' は未宣言の配列です", n.Name))
+		c.addErrorPos(n.Position(), "TC2008", fmt.Sprintf("index: '%s' は未宣言の配列です", n.Name))
 		return TypeInfo{Kind: KindUnknown}
 	}
 
 	// 配列型チェック
 	if arrType.Kind != KindArrayInt && arrType.Kind != KindArrayFloat && arrType.Kind != KindArrayBool {
-		c.addError(0, "TC2009", fmt.Sprintf(
+		c.addErrorPos(n.Position(), "TC2009", fmt.Sprintf(
 			"index: '%s' は配列型ではありません（%s）", n.Name, arrType.String(),
 		))
 	}
@@ -478,7 +488,7 @@ func (c *Checker) checkIndex(n *ast.IndexNode) TypeInfo {
 	// インデックスの型チェック
 	idxType := c.checkNode(n.Index)
 	if idxType.Kind != KindUnknown && idxType.Kind != KindInt {
-		c.addError(0, "TC2010", fmt.Sprintf(
+		c.addErrorPos(n.Position(), "TC2010", fmt.Sprintf(
 			"index: 配列インデックスはint型でなければなりません（%s が渡されました）",
 			idxType.String(),
 		))
@@ -515,7 +525,7 @@ func (c *Checker) checkIntOverflow(n *ast.LiteralNode) {
 	}
 	// 32bit int の範囲チェック（QBEのwはi32）
 	if val > math.MaxInt32 || val < math.MinInt32 {
-		c.addError(n.Line, "TC4001", fmt.Sprintf(
+		c.addErrorPos(n.Position(), "TC4001", fmt.Sprintf(
 			"整数オーバーフロー: %d はint(32bit)の範囲[%d, %d]を超えています",
 			val, math.MinInt32, math.MaxInt32,
 		))

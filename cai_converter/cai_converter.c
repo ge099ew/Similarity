@@ -31,6 +31,7 @@ typedef enum {
     OP_CALL, OP_RET, OP_RETV,
     OP_ITOF, OP_FTOI, OP_MOV,
     OP_EXTERN, OP_FUNC, OP_ENDFUNC,
+    OP_DATA,    /* data $label "文字列" → .rodataへ配置 */
     OP_COMMENT,
 } OpKind;
 
@@ -42,6 +43,7 @@ typedef struct {
     char   args[MAX_ARGS][MAX_NAME];
     int    argc;
     int    is_export;
+    char   str_val[512]; /* data命令の文字列内容 */
 } Instr;
 
 typedef struct {
@@ -77,6 +79,11 @@ static char     eax_holds[MAX_NAME];
 /* ===== コードバッファ ===== */
 static uint8_t  code[CODE_MAX];
 static int      code_size = 0;
+
+/* ===== rodataバッファ（読み取り専用データ：文字列定数等） ===== */
+#define RODATA_MAX (1*1024*1024)
+static uint8_t  rodata[RODATA_MAX];
+static int      rodata_size = 0;
 
 /* ===== シンボルテーブル ===== */
 typedef struct { char name[MAX_NAME]; int off; int defined; int global; } Sym;
@@ -304,6 +311,36 @@ static void parse_line(char *line){
         else ins->kind=OP_RETV;
     } else if(!strcmp(tok,"extern")){
         ins->kind=OP_EXTERN; NEXT; if(tok) strncpy(ins->dst,tok,MAX_NAME-1);
+    } else if(!strcmp(tok,"data")){
+        /* data $label "文字列内容" */
+        ins->kind=OP_DATA;
+        NEXT; if(tok) strncpy(ins->dst,tok,MAX_NAME-1); /* ラベル名 */
+        /* 残りの行から文字列を取得（ダブルクォート内） */
+        char *rest=strtok(NULL,""); /* 残り全部 */
+        if(rest){
+            trim(rest);
+            if(rest[0]=='"'){
+                rest++;
+                int slen=0;
+                /* エスケープシーケンス処理 */
+                while(*rest&&*rest!='"'&&slen<511){
+                    if(*rest=='\\'&&*(rest+1)){
+                        rest++;
+                        switch(*rest){
+                            case 'n': ins->str_val[slen++]='\n'; break;
+                            case 't': ins->str_val[slen++]='\t'; break;
+                            case '\\': ins->str_val[slen++]='\\'; break;
+                            case '"': ins->str_val[slen++]='"'; break;
+                            default: ins->str_val[slen++]='\\'; ins->str_val[slen++]=*rest; break;
+                        }
+                    } else {
+                        ins->str_val[slen++]=*rest;
+                    }
+                    rest++;
+                }
+                ins->str_val[slen]='\0';
+            }
+        }
     } else { ins->kind=OP_COMMENT; }
     #undef NEXT
     instr_count++;
@@ -912,7 +949,15 @@ static void emit_mov_rax_rcx64(){ emit1(0x48); emit1(0x89); emit1(0xC8); }
 /* movsx rax, eax */
 static void emit_movsxd_rax_eax(){ emit3(0x48,0x63,0xC0); }
 
-/* 文字列をコードバッファに埋め込み、アドレスを返す */
+/* 文字列をrodataバッファに追加し、rodata内オフセットを返す */
+static int rodata_add_str(const char *s){
+    int off = rodata_size;
+    while(*s) rodata[rodata_size++] = (uint8_t)*s++;
+    rodata[rodata_size++] = 0; /* NUL終端 */
+    return off;
+}
+
+/* 文字列をコードバッファに埋め込み、code内オフセットを返す（ランタイム埋め込み用） */
 static int embed_str(const char *s){
     int off=code_size;
     while(*s) emit1((uint8_t)*s++);
@@ -987,7 +1032,7 @@ static void emit_runtime(){
     patch_count++;
 }
 
-/* ===== ELF実行ファイル直接生成 ===== */
+/* ===== ELF実行ファイル直接生成（.text + .rodata セクション分離） ===== */
 #define LOAD_BASE  0x400000ULL
 #define PAGE       0x1000ULL
 
@@ -1002,12 +1047,34 @@ typedef struct {
 } ExePhdr;
 
 static void write_exe(const char *path){
-    /* 全シンボルのrelocを解決 */
-    uint64_t text_vma = LOAD_BASE + 0x1000;
+    /*
+     * ファイルレイアウト:
+     *   0x0000 : ELFヘッダ (64B)
+     *   0x0040 : PHDRx2   (2 * 56B = 112B)
+     *   0x1000 : .text    (code_size bytes, RX)
+     *   pageアライン後
+     *   0xN000 : .rodata  (rodata_size bytes, R)  ← 新規追加
+     */
+
+    /* .textセクションのVMA */
+    uint64_t text_file_off = 0x1000;
+    uint64_t text_vma      = LOAD_BASE + text_file_off;
+
+    /* .rodataセクションのファイルオフセット（pageアライン） */
+    uint64_t rodata_file_off = (text_file_off + (uint64_t)code_size + PAGE - 1) & ~(PAGE - 1);
+    uint64_t rodata_vma      = LOAD_BASE + rodata_file_off;
 
     /* シンボルのVMAを設定 */
-    for(int i=0;i<sym_count;i++)
-        if(syms[i].defined) syms[i].off += (int)text_vma; /* VMA = text_vma + offset */
+    for(int i=0;i<sym_count;i++){
+        if(!syms[i].defined) continue;
+        if(syms[i].off & (1<<30)){
+            /* rodataシンボル: bit30を外してrodata_vmaを加算 */
+            syms[i].off = (int)((syms[i].off & ~(1<<30)) + rodata_vma);
+        } else {
+            /* textシンボル */
+            syms[i].off += (int)text_vma;
+        }
+    }
 
     /* patches を適用 */
     int unresolved = 0;
@@ -1023,16 +1090,17 @@ static void write_exe(const char *path){
         patch_i32(patches[i].code_off, rel);
     }
 
+    if(unresolved > 0){
+        fprintf(stderr,"Link failed: %d unresolved symbol(s).\n", unresolved);
+        return;
+    }
+
     /* _startのVMA = entrypoint */
     int start_si=sym_find2("_start");
     uint64_t entry = start_si>=0 ? (uint64_t)syms[start_si].off : text_vma;
 
-    /* ファイルレイアウト */
-    uint64_t ehdr_size=sizeof(ExeEhdr);
-    uint64_t phdr_size=sizeof(ExePhdr);
-    uint64_t hdr_total=ehdr_size+phdr_size;
-    uint64_t text_off=0x1000; /* pageアライン */
-    uint64_t file_size=text_off+code_size;
+    /* ファイルサイズ計算 */
+    uint64_t file_size = rodata_file_off + (uint64_t)(rodata_size > 0 ? rodata_size : 0);
 
     uint8_t *buf=(uint8_t*)calloc(1,file_size);
     if(!buf){perror("calloc");return;}
@@ -1041,38 +1109,49 @@ static void write_exe(const char *path){
     ExeEhdr *eh=(ExeEhdr*)buf;
     memcpy(eh->e_ident,"\x7f" "ELF",4);
     eh->e_ident[4]=2; eh->e_ident[5]=1; eh->e_ident[6]=1;
-    eh->e_type=2; /* ET_EXEC */
+    eh->e_type=2;   /* ET_EXEC */
     eh->e_machine=62; /* EM_X86_64 */
     eh->e_version=1;
     eh->e_entry=entry;
-    eh->e_phoff=ehdr_size;
-    eh->e_ehsize=ehdr_size;
+    eh->e_phoff=sizeof(ExeEhdr);
+    eh->e_ehsize=sizeof(ExeEhdr);
     eh->e_phentsize=sizeof(ExePhdr);
-    eh->e_phnum=1;
+    eh->e_phnum=(rodata_size > 0) ? 2 : 1; /* rodataがあれば2セグメント */
 
-    /* プログラムヘッダ: LOAD */
-    ExePhdr *ph=(ExePhdr*)(buf+ehdr_size);
-    ph->p_type=1; /* PT_LOAD */
-    ph->p_flags=5; /* PF_R|PF_X */
+    /* PT_LOAD #1: .text (RX) */
+    ExePhdr *ph=(ExePhdr*)(buf+sizeof(ExeEhdr));
+    ph->p_type=1;   /* PT_LOAD */
+    ph->p_flags=5;  /* PF_R|PF_X */
     ph->p_offset=0;
     ph->p_vaddr=LOAD_BASE;
     ph->p_paddr=LOAD_BASE;
-    ph->p_filesz=file_size;
-    ph->p_memsz=file_size;
+    ph->p_filesz=text_file_off + (uint64_t)code_size;
+    ph->p_memsz =text_file_off + (uint64_t)code_size;
     ph->p_align=PAGE;
 
-    memcpy(buf+text_off, code, code_size);
+    /* PT_LOAD #2: .rodata (R) — rodataがある場合のみ有効 */
+    if(rodata_size > 0){
+        ExePhdr *ph2 = ph + 1;
+        ph2->p_type=1;  /* PT_LOAD */
+        ph2->p_flags=4; /* PF_R */
+        ph2->p_offset=rodata_file_off;
+        ph2->p_vaddr=rodata_vma;
+        ph2->p_paddr=rodata_vma;
+        ph2->p_filesz=(uint64_t)rodata_size;
+        ph2->p_memsz =(uint64_t)rodata_size;
+        ph2->p_align=PAGE;
+    }
+
+    /* セクションデータをバッファに書き込み */
+    memcpy(buf + text_file_off, code, code_size);
+    if(rodata_size > 0)
+        memcpy(buf + rodata_file_off, rodata, rodata_size);
 
     FILE *f=fopen(path,"wb");
     if(!f){perror("fopen exe");free(buf);return;}
     fwrite(buf,1,file_size,f);
     fclose(f);
     free(buf);
-
-    if(unresolved > 0){
-        fprintf(stderr,"Link failed: %d unresolved symbol(s).\n", unresolved);
-        return;
-    }
 
     /* chmod +x: fchmod syscallで実行権限付与（shell不要） */
     {
@@ -1108,6 +1187,22 @@ int main(int argc,char *argv[]){
     /* itoa64とruntimeを生成 */
     emit_itoa64();
     emit_runtime();
+
+    /* data命令を処理: .rodataに文字列定数を配置しシンボル登録
+       生成されたVMAは文字列定数を参照するCAI命令から使用可能 */
+    /* 注意: rodataのVMAはwrite_exe内で確定するため、ここではオフセットのみ記録
+       実際のVMA = rodata_vma_base + rodata_offset（write_exe内で計算）
+       現時点ではrodata内オフセットをシンボルとして仮登録し、write_exe側でVMAを補正する */
+    for(int i=0;i<instr_count;i++){
+        if(instrs[i].kind==OP_DATA){
+            const char *label=instrs[i].dst;
+            if(label[0]=='$') label++;
+            int off=rodata_add_str(instrs[i].str_val);
+            /* オフセットをシンボルとして登録（is_rodata=global, defined=1）
+               VMAはwrite_exe内で補正される */
+            sym_define(label, off | (1<<30), 1); /* bit30=rodataフラグ */
+        }
+    }
 
     /* ELF実行ファイル直接出力（GCC不要） */
     write_exe(argv[2]);

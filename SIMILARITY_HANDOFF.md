@@ -31,19 +31,20 @@ C/C++を玉座から引きずり降ろすために設計されたシステムプ
 Similarity/
 ├── cmd/main.go              — エントリーポイント（--ir-only / --cai フラグ対応）
 ├── lexer/lexer.go
-├── parser/parser.go
+├── parser/parser.go         — ★ 負数リテラルバグ修正済み
 ├── ast/ast.go
 ├── codegen/codegen.go       — QBE IR生成
 ├── caigen/caigen.go         — CAI IR生成
 ├── cgen/cgen.go             — Cフォールバック
 ├── transpiler/transpiler.go — .sml→.iiaトランスパイラ
 ├── typecheck/
+│   └── typecheck.go         — ★ 全エラーに行番号・列番号付与済み
 ├── echo/echo.go             — project.eho生成
 ├── cel/cel.go               — project.cel管理
 ├── stdlib/math.go
 ├── error/error.go
 ├── cai_converter/
-│   └── cai_converter.c      — CAI→x86_64機械語直接生成+ELF出力（GCC不要）
+│   └── cai_converter.c      — ★ .text/.rodataセクション分離済み + data命令追加
 └── benchmark/
     ├── bench_fib.iia/.sml/.cpp
     ├── bench_sum.iia/.sml/.cpp
@@ -79,6 +80,7 @@ Similarity/
 ### 変数・演算子・制御フロー
 ```iia
 Variable[let{int(x:10)}]
+Variable[let{int(x:-5)}]      ← 負数リテラル対応済み（parser.go修正）
 Variable[unclet{float(PI:3.14)}]
 +{int(a:b)}  -{int(a:b)}  *{int(a:b)}  /{int(a:b)}
 equal(a:b)  notequal(a:b)  less(a:b)  lesseq(a:b)  greater(a:b)  greatereq(a:b)
@@ -122,6 +124,8 @@ Extern[C{lib{"SDL2"}, draw{receive{int(x)}, return{}}}]
 | TC5001 | share: 未宣言変数 |
 | TC5002 | Async内でshare宣言なしにMutation |
 
+**★ 全エラーが `行:列: TypeCheck Error [コード]: メッセージ` 形式で出力されるようになった**
+
 ---
 
 ## 5. サポートシステム
@@ -159,12 +163,18 @@ dependencies:
   - 未解決シンボルを致命エラー化 ✅
   - peephole最適化（EAX追跡）✅
   - レジスタ割り当て（callee-saved: rbx/r12-r15）✅
+  - **★ .text/.rodataセクション分離済み** ✅
+    - PT_LOAD #1: .text（RX）0x400000
+    - PT_LOAD #2: .rodata（R）pageアライン後
+    - rodataが空のときはPHDR 1つ（後方互換）
+  - **★ CAI IR `data`命令を新設** ✅
+    - `data $label "文字列"` → .rodataに配置しシンボル登録
+    - エスケープシーケンス（\n \t \\ \"）対応済み
 
 ### 残課題
-1. セクション分離（.text/.rodata/.data/.bss）
-2. アラインメント一般化
-3. PIE/ASLR対応
-4. APE形式（Cosmopolitan、マルチOS）
+1. アラインメント一般化
+2. PIE/ASLR対応
+3. APE形式（Cosmopolitan、マルチOS）
 
 ### 使い方
 ```bash
@@ -180,13 +190,14 @@ add/sub/mul/div %dst %a %b
 clt/cle/ceq/cne/cgt/cge %dst %a %b
 label name / jmp label / jnz %cond true false
 call %dst $func args... / ret %val
+data $label "文字列"          ← 新規追加
 ```
 
 ---
 
 ## 7. stdlib（標準ライブラリ）
 
-- `absolute_value(x)` → 絶対値 ✅
+- `absolute_value(x)` → 絶対値 ✅（負数リテラルバグ修正済み）
 - `maximum(a, b)` → 最大値 ✅
 
 ---
@@ -220,12 +231,12 @@ bash benchmark/run_benchmark_cai.sh   # CAI vs C++
 
 | 機能 | 状態 |
 |---|---|
-| lexer/parser | ✅ |
+| lexer/parser | ✅（負数リテラルバグ修正済み） |
 | codegen（QBE） | ✅ |
 | ポインタ/配列/cast/構造体 | ✅ |
 | Mem[risk{}] | ✅ |
 | Async/Await/share() | ✅ |
-| typecheck | ✅ |
+| typecheck（行番号・列番号付きエラー） | ✅ |
 | Echo（project.eho） | ✅ |
 | Cell（project.cel） | ✅ |
 | stdlib/math | ✅ |
@@ -236,11 +247,14 @@ bash benchmark/run_benchmark_cai.sh   # CAI vs C++
 | ld代替（ELF直接生成） | ✅ |
 | syscall直接呼び出し | ✅ |
 | GCC完全不要（CAIパイプライン） | ✅ |
-| セクション分離（.text/.rodata等） | 🔶 未着手 |
+| **セクション分離（.text/.rodata）** | ✅ |
+| **CAI data命令（文字列定数→.rodata）** | ✅ |
+| アラインメント一般化 | 🔶 未着手 |
+| PIE/ASLR対応 | 🔶 未着手 |
 | APE形式（マルチOS） | 🔶 未着手 |
 | 標準ライブラリ拡張（io等） | 🔶 未着手 |
-| 各言語互換性レイヤー（Python/Rust/Java/C#/Odin/JS/Go/Zig） | 🔶 未着手 |
-| ASTへ位置情報追加（LSP対応） | 🔶 未着手 |
+| 各言語互換性レイヤー | 🔶 未着手 |
+| ASTへの位置情報（LSP対応） | ✅（typecheckに反映済み） |
 | string→enum化 | 🔶 未着手 |
 | GPU本実装 | 🔶 未着手 |
 | 自己ホスト | 📅 長期目標 |
@@ -249,11 +263,11 @@ bash benchmark/run_benchmark_cai.sh   # CAI vs C++
 
 ## 10. 未実装タスク一覧
 
-1. セクション分離（.text/.rodata/.data/.bss）
-2. APE形式（Cosmopolitan Libc、マルチOS対応）
-3. 標準ライブラリ拡張（io等）
-4. 各言語互換性レイヤー
-5. ASTへ位置情報追加（LSP対応）
+1. アラインメント一般化（CAIバックエンド）
+2. PIE/ASLR対応
+3. APE形式（Cosmopolitan Libc、マルチOS対応）
+4. 標準ライブラリ拡張（io等）
+5. 各言語互換性レイヤー（Python/Rust/Java/C#/Odin/JS/Go/Zig）
 6. string→enum化（TypeKind, OpKind等）
 7. GPU本実装
 8. Webサイト: ダウンロードURL本番差し替え
@@ -270,7 +284,7 @@ gcc -O2 -o cai_conv cai_converter/cai_converter.c
 ./sim test_math.iia              # result: 5
 ./sim --cai test_math.iia        # result: 5（GCC不要）
 echo "Y" | ./sim test_all.iia   # result: 42
-./sim test_errors.iia            # TC4001でコンパイル中断
+./sim test_errors.iia            # 5:22: TypeCheck Error [TC4001]...
 bash benchmark/run_benchmark.sh
 bash benchmark/run_benchmark_cai.sh
 ```
