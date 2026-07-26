@@ -25,8 +25,8 @@ SimilarityはC/C++依存ゼロを目指したオリジナルのシステムプ�
 ```
 
 **CAI（Common Assembly Instructions / 共通アセンブリ命令）** はSimilarity独自のIRです。
-`cai_conv`はx86_64機械語を直接生成し、GCCのアセンブラ（as）を使いません。
-GCCはリンク（ld）のみに使用します。最終的にldも自前実装に置き換えます。
+`cai_conv`はx86_64機械語を直接生成し、GCCのアセンブラ（as）もリンカ（ld）も使いません。
+ELF実行ファイルをsyscallベースで直接出力します。GCC不要。
 
 ---
 
@@ -50,6 +50,7 @@ GCCはリンク（ld）のみに使用します。最終的にldも自前実装�
 ### 変数
 ```iia
 Variable[let{int(x:10)}]
+Variable[let{int(x:-5)}]
 Variable[unclet{float(PI:3.14)}]
 Mutation[variable{int(x:30)}]
 ```
@@ -128,6 +129,8 @@ Extern[C{lib{"SDL2"}, draw{receive{int(x)}, return{}}}]
 
 ## 安全性システム（コンパイル時）
 
+エラーは **`行:列: TypeCheck Error [コード]: メッセージ`** 形式で出力されます。
+
 | エラーコード | 内容 |
 |---|---|
 | TC1001 | null許容型のnullチェックなしアクセス |
@@ -193,7 +196,7 @@ gcc -O2 -o cai_conv cai_converter/cai_converter.c
 
 # 実行
 ./sim your_file.iia             # QBEバックエンド
-./sim --cai your_file.iia       # CAIバックエンド（自前アセンブラ）
+./sim --cai your_file.iia       # CAIバックエンド（GCC不要）
 ./sim --ir-only your_file.iia   # QBE IRのみ生成
 ./sim your_file.sml             # シュガーシンタックス
 ```
@@ -213,7 +216,7 @@ gcc -O2 -o cai_conv cai_converter/cai_converter.c
 | Mem[risk{}] | ✅ |
 | Async/Await（pthread） | ✅ |
 | share()（データ競合検出） | ✅ |
-| typecheck（コンパイル時安全性） | ✅ |
+| typecheck（行番号・列番号付きエラー） | ✅ |
 | Echo（project.eho） | ✅ |
 | Cell（project.cel） | ✅ |
 | return()構文 | ✅ |
@@ -223,6 +226,8 @@ gcc -O2 -o cai_conv cai_converter/cai_converter.c
 | CAI変換器（x86_64直接生成） | ✅ |
 | asの代替（機械語直接生成） | ✅ |
 | ldの代替（ELF直接生成） | ✅ |
+| セクション分離（.text / .rodata） | ✅ |
+| CAI data命令（文字列定数→.rodata） | ✅ |
 | 標準ライブラリ拡張 | 🔶 未着手 |
 | 各言語互換性レイヤー | 🔶 未着手 |
 | GPU本実装 | 🔶 CAI安定後 |
@@ -237,18 +242,18 @@ gcc -O2 -o cai_conv cai_converter/cai_converter.c
 2. **unsafe操作はMem[risk{}]で明示**（Echoが自動レポート）
 3. **Async間の共有変数はshare()で明示**
 4. **速度は妥協しない** — GCなし、ゼロコスト抽象化
-5. **C/C++依存ゼロ** — CAI変換器がasを排除、ldも順次置き換え
+5. **C/C++依存ゼロ** — CAI変換器がas・ldを完全排除済み
 
 ---
 
 ## 開発進捗
 
 ### 現在のフォーカス
-CAIバックエンドの最適化・C/C++依存の段階的排除
+CAIバックエンドの安定化・最適化
 
 ### Phase 1: フロントエンド完成（✅ 完了）
 - lexer / parser / AST
-- typecheck（null安全・型整合性・オーバーフロー検出・データ競合防止）
+- typecheck（null安全・型整合性・オーバーフロー検出・データ競合防止・行番号付きエラー出力）
 - Echo（project.eho）/ Cell（project.cel）
 - QBEバックエンド
 - シュガーシンタックス（.sml）
@@ -260,6 +265,7 @@ CAIバックエンドの最適化・C/C++依存の段階的排除
 - cai_conv（CAI→x86_64機械語直接生成）✅
 - asの代替（GCCのアセンブラを排除）✅
 - ldの代替（ELF直接生成）✅
+- セクション分離（.text / .rodata）✅
 - APE形式（Cosmopolitan、マルチOS対応）📅
 
 ### Phase 3: エコシステム（📅 未着手）
