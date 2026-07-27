@@ -1,6 +1,23 @@
 /*
- * CAI Converter v3 - CAIテキスト → x86_64機械語直接生成 → .oファイル → リンク
- * asを完全排除。GCCはリンク(ld)のみ使用。
+ * CAI Converter v6 - CAIテキスト → x86_64機械語直接生成 → ELF実行ファイル
+ * asを完全排除。GCC不要。
+ *
+ * v4変更点:
+ *   - グローバル変数を CaiContext 構造体へ集約
+ *   - Program Header 管理を PhdrList で構造化
+ *   - align_up() 共通関数化
+ *   - chmod を fchmod に変更
+ *   - 未解決シンボルは致命エラー
+ *
+ * v5変更点:
+ *   - 静的PIE対応（ET_DYN + ロードベース0x0）
+ *
+ * v6変更点（PIE完全化）:
+ *   - PT_PHDR 追加（プログラムヘッダの正規配置）
+ *   - PT_GNU_STACK 追加（NX有効・スタック実行禁止）
+ *   - PT_DYNAMIC + .dynamic セクション追加（ET_DYNの正規化）
+ *   - セクションヘッダ追加（.text/.rodata/.dynamic/.shstrtab）
+ *     → readelf/objdump/gdb でデバッグ可能
  */
 
 #include <stdio.h>
@@ -21,6 +38,13 @@
 #define MAX_LABELS   4096
 #define MAX_PATCHES  8192
 #define CODE_MAX     (4*1024*1024)
+#define RODATA_MAX   (1*1024*1024)
+#define MAX_PHDRS    16   /* Program Headerの最大数 */
+
+/* ===== アラインメント共通関数 ===== */
+static uint64_t align_up(uint64_t value, uint64_t alignment){
+    return (value + alignment - 1) & ~(alignment - 1);
+}
 
 /* ===== 命令種別 ===== */
 typedef enum {
@@ -31,7 +55,7 @@ typedef enum {
     OP_CALL, OP_RET, OP_RETV,
     OP_ITOF, OP_FTOI, OP_MOV,
     OP_EXTERN, OP_FUNC, OP_ENDFUNC,
-    OP_DATA,    /* data $label "文字列" → .rodataへ配置 */
+    OP_DATA,
     OP_COMMENT,
 } OpKind;
 
@@ -43,7 +67,7 @@ typedef struct {
     char   args[MAX_ARGS][MAX_NAME];
     int    argc;
     int    is_export;
-    char   str_val[512]; /* data命令の文字列内容 */
+    char   str_val[512];
 } Instr;
 
 typedef struct {
@@ -54,59 +78,125 @@ typedef struct {
 
 /* ===== レジスタ割り当て ===== */
 #define NUM_ALLOC_REGS 5
-/* callee-saved: rbx=3, r12=12, r13=13, r14=14, r15=15 */
 static const int alloc_phys[NUM_ALLOC_REGS] = {3, 12, 13, 14, 15};
 
 typedef struct {
     char name[MAX_NAME];
     int  stack_off;
-    int  phys_reg;   /* -1=スタック、>=0=物理レジスタインデックス */
+    int  phys_reg;
     int  use_count;
     int  is_ptr;
 } VReg;
 
-/* ===== グローバル状態 ===== */
-static Instr    instrs[MAX_INSTRS];
-static int      instr_count = 0;
-static FuncInfo funcs[MAX_FUNCS];
-static int      func_count = 0;
-static VReg     vregs[MAX_REGS];
-static int      vreg_count = 0;
-static int      stack_used = 0;
-static int      reg_used[NUM_ALLOC_REGS];
-static char     eax_holds[MAX_NAME];
-
-/* ===== コードバッファ ===== */
-static uint8_t  code[CODE_MAX];
-static int      code_size = 0;
-
-/* ===== rodataバッファ（読み取り専用データ：文字列定数等） ===== */
-#define RODATA_MAX (1*1024*1024)
-static uint8_t  rodata[RODATA_MAX];
-static int      rodata_size = 0;
-
-/* ===== シンボルテーブル ===== */
+/* ===== シンボル/パッチ/ラベル ===== */
 typedef struct { char name[MAX_NAME]; int off; int defined; int global; } Sym;
-static Sym syms[MAX_FUNCS*2];
-static int sym_count = 0;
-
 typedef struct { int code_off; char sym[MAX_NAME]; } Patch;
-static Patch patches[MAX_PATCHES];
-static int   patch_count = 0;
-
-/* ===== ラベルテーブル（関数内） ===== */
 typedef struct { char name[MAX_NAME]; int off; } Label;
-static Label labels[MAX_LABELS];
-static int   label_count = 0;
-
 typedef struct { int code_off; char name[MAX_NAME]; } LabelPatch;
-static LabelPatch lpatches[MAX_PATCHES];
-static int        lpatch_count = 0;
+
+/* ===== Program Header 管理構造体 ===== */
+/* ELF PT_LOAD のフラグ定数 */
+#define PF_X 0x1
+#define PF_W 0x2
+#define PF_R 0x4
+
+typedef struct {
+    uint32_t p_type;    /* PT_LOAD=1 etc. */
+    uint32_t p_flags;   /* PF_R|PF_X など */
+    uint64_t p_offset;  /* ファイルオフセット */
+    uint64_t p_vaddr;
+    uint64_t p_paddr;
+    uint64_t p_filesz;
+    uint64_t p_memsz;
+    uint64_t p_align;
+} PhdrEntry;
+
+typedef struct {
+    PhdrEntry entries[MAX_PHDRS];
+    int       count;
+} PhdrList;
+
+static void phdr_add(PhdrList *pl, uint32_t type, uint32_t flags,
+                     uint64_t offset, uint64_t vaddr,
+                     uint64_t filesz, uint64_t memsz, uint64_t align){
+    if(pl->count >= MAX_PHDRS){ fprintf(stderr,"PhdrList overflow\n"); return; }
+    PhdrEntry *e = &pl->entries[pl->count++];
+    e->p_type   = type;
+    e->p_flags  = flags;
+    e->p_offset = offset;
+    e->p_vaddr  = vaddr;
+    e->p_paddr  = vaddr;
+    e->p_filesz = filesz;
+    e->p_memsz  = memsz;
+    e->p_align  = align;
+}
+
+/* ===== CaiContext: 全グローバル状態を集約 ===== */
+typedef struct {
+    /* 命令列 */
+    Instr    instrs[MAX_INSTRS];
+    int      instr_count;
+
+    /* 関数情報 */
+    FuncInfo funcs[MAX_FUNCS];
+    int      func_count;
+
+    /* 仮想レジスタ（関数ごとにリセット） */
+    VReg     vregs[MAX_REGS];
+    int      vreg_count;
+    int      stack_used;
+    int      reg_used[NUM_ALLOC_REGS];
+    char     eax_holds[MAX_NAME];
+
+    /* コードバッファ */
+    uint8_t  code[CODE_MAX];
+    int      code_size;
+
+    /* rodataバッファ */
+    uint8_t  rodata[RODATA_MAX];
+    int      rodata_size;
+
+    /* シンボルテーブル */
+    Sym      syms[MAX_FUNCS*2];
+    int      sym_count;
+
+    /* パッチ（関数間参照） */
+    Patch    patches[MAX_PATCHES];
+    int      patch_count;
+
+    /* ラベル（関数内） */
+    Label    labels[MAX_LABELS];
+    int      label_count;
+    LabelPatch lpatches[MAX_PATCHES];
+    int      lpatch_count;
+} CaiContext;
+
+/* コンテキストをゼロ初期化して生成 */
+static CaiContext *ctx_new(void){
+    CaiContext *c = (CaiContext*)calloc(1, sizeof(CaiContext));
+    if(!c){ perror("calloc CaiContext"); exit(1); }
+    return c;
+}
+
+/* ===== コードバッファ操作（ctx経由） ===== */
+static void emit1(CaiContext *c, uint8_t b){ c->code[c->code_size++]=b; }
+static void emit2(CaiContext *c, uint8_t a, uint8_t b){ emit1(c,a); emit1(c,b); }
+static void emit3(CaiContext *c, uint8_t a, uint8_t b, uint8_t v){ emit2(c,a,b); emit1(c,v); }
+static void emit_i32(CaiContext *c, int32_t v){
+    c->code[c->code_size++]=v&0xFF;
+    c->code[c->code_size++]=(v>>8)&0xFF;
+    c->code[c->code_size++]=(v>>16)&0xFF;
+    c->code[c->code_size++]=(v>>24)&0xFF;
+}
+static void patch_i32(CaiContext *c, int off, int32_t v){
+    c->code[off]=v&0xFF; c->code[off+1]=(v>>8)&0xFF;
+    c->code[off+2]=(v>>16)&0xFF; c->code[off+3]=(v>>24)&0xFF;
+}
 
 /* ===== EAX追跡 ===== */
-static void reset_eax(){ eax_holds[0]='\0'; }
-static int  eax_has(const char *n){ return n[0]&&!strcmp(eax_holds,n); }
-static void set_eax(const char *n){ strncpy(eax_holds,n,MAX_NAME-1); }
+static void reset_eax(CaiContext *c){ c->eax_holds[0]='\0'; }
+static int  eax_has(CaiContext *c, const char *n){ return n[0]&&!strcmp(c->eax_holds,n); }
+static void set_eax(CaiContext *c, const char *n){ strncpy(c->eax_holds,n,MAX_NAME-1); }
 
 /* ===== ユーティリティ ===== */
 static void trim(char *s){
@@ -123,25 +213,10 @@ static int is_imm(const char *s){
     return 1;
 }
 
-/* ===== コード生成ヘルパー ===== */
-static void emit1(uint8_t b){ code[code_size++]=b; }
-static void emit2(uint8_t a,uint8_t b){ code[code_size++]=a; code[code_size++]=b; }
-static void emit3(uint8_t a,uint8_t b,uint8_t c){ emit2(a,b); emit1(c); }
-static void emit_i32(int32_t v){
-    code[code_size++]=v&0xFF; code[code_size++]=(v>>8)&0xFF;
-    code[code_size++]=(v>>16)&0xFF; code[code_size++]=(v>>24)&0xFF;
-}
-static void patch_i32(int off, int32_t v){
-    code[off]=v&0xFF; code[off+1]=(v>>8)&0xFF;
-    code[off+2]=(v>>16)&0xFF; code[off+3]=(v>>24)&0xFF;
-}
+/* ===== ModRM / REX / レジスタ定数 ===== */
+static uint8_t modrm(int mod,int reg,int rm){ return (uint8_t)((mod<<6)|((reg&7)<<3)|(rm&7)); }
+static uint8_t rex(int w,int r,int x,int b){ return (uint8_t)(0x40|(w?8:0)|(r?4:0)|(x?2:0)|(b?1:0)); }
 
-/* ModRM */
-static uint8_t modrm(int mod,int reg,int rm){ return (mod<<6)|((reg&7)<<3)|(rm&7); }
-/* REX */
-static uint8_t rex(int w,int r,int x,int b){ return 0x40|(w?8:0)|(r?4:0)|(x?2:0)|(b?1:0); }
-
-/* レジスタ番号 */
 #define EAX 0
 #define ECX 1
 #define EDX 2
@@ -150,117 +225,96 @@ static uint8_t rex(int w,int r,int x,int b){ return 0x40|(w?8:0)|(r?4:0)|(x?2:0)
 #define RBP 5
 #define ESI 6
 #define EDI 7
-/* R8=8..R15=15 */
-/* 引数レジスタ（64bit） */
-static const int argregs64[]={7,6,2,1,8,9}; /* rdi,rsi,rdx,rcx,r8,r9 */
 
-/* phys_regインデックス→実レジスタ番号 */
+static const int argregs64[]={7,6,2,1,8,9}; /* rdi,rsi,rdx,rcx,r8,r9 */
 static int phys_to_reg(int pi){ return alloc_phys[pi]; }
 
-/* 32bit版レジスタ名 */
-static const char *r32name[]={
-    "eax","ecx","edx","ebx","esp","ebp","esi","edi",
-    "r8d","r9d","r10d","r11d","r12d","r13d","r14d","r15d"
-};
-
-/* push reg64 */
-static void emit_push(int r){
-    if(r>=8){ emit1(0x41); emit1(0x50+(r-8)); } else emit1(0x50+r);
+/* ===== emit ヘルパー（ctx版） ===== */
+static void emit_push(CaiContext *c, int r){
+    if(r>=8){ emit1(c,0x41); emit1(c,(uint8_t)(0x50+(r-8))); }
+    else emit1(c,(uint8_t)(0x50+r));
 }
-/* pop reg64 */
-static void emit_pop(int r){
-    if(r>=8){ emit1(0x41); emit1(0x58+(r-8)); } else emit1(0x58+r);
+static void emit_pop(CaiContext *c, int r){
+    if(r>=8){ emit1(c,0x41); emit1(c,(uint8_t)(0x58+(r-8))); }
+    else emit1(c,(uint8_t)(0x58+r));
 }
-
-/* mov r32, imm32 */
-static void emit_mov_r32_imm(int r, int32_t imm){
-    if(r>=8) emit1(rex(0,0,0,1));
-    emit1(0xB8+(r&7)); emit_i32(imm);
+static void emit_mov_r32_imm(CaiContext *c, int r, int32_t imm){
+    if(r>=8) emit1(c,rex(0,0,0,1));
+    emit1(c,(uint8_t)(0xB8+(r&7))); emit_i32(c,imm);
 }
-
-/* mov [rbp+off], r32 */
-static void emit_store_r32(int r, int off){
-    if(r>=8) emit1(rex(0,1,0,0));
-    emit1(0x89);
-    if(off>=-128&&off<=127){ emit1(modrm(1,r&7,RBP)); emit1((int8_t)off); }
-    else { emit1(modrm(2,r&7,RBP)); emit_i32(off); }
+static void emit_store_r32(CaiContext *c, int r, int off){
+    if(r>=8) emit1(c,rex(0,1,0,0));
+    emit1(c,0x89);
+    if(off>=-128&&off<=127){ emit1(c,modrm(1,r&7,RBP)); emit1(c,(uint8_t)(int8_t)off); }
+    else { emit1(c,modrm(2,r&7,RBP)); emit_i32(c,off); }
 }
-
-/* mov r32, [rbp+off] */
-static void emit_load_r32(int r, int off){
-    if(r>=8) emit1(rex(0,1,0,0));
-    emit1(0x8B);
-    if(off>=-128&&off<=127){ emit1(modrm(1,r&7,RBP)); emit1((int8_t)off); }
-    else { emit1(modrm(2,r&7,RBP)); emit_i32(off); }
+static void emit_load_r32(CaiContext *c, int r, int off){
+    if(r>=8) emit1(c,rex(0,1,0,0));
+    emit1(c,0x8B);
+    if(off>=-128&&off<=127){ emit1(c,modrm(1,r&7,RBP)); emit1(c,(uint8_t)(int8_t)off); }
+    else { emit1(c,modrm(2,r&7,RBP)); emit_i32(c,off); }
 }
-
-/* mov r32, r32 */
-static void emit_mov_r32(int dst, int src){
-    if(dst>=8||src>=8) emit1(rex(0,src>=8,0,dst>=8));
-    emit1(0x89); emit1(modrm(3,src&7,dst&7));
+static void emit_mov_r32(CaiContext *c, int dst, int src){
+    if(dst>=8||src>=8) emit1(c,rex(0,src>=8,0,dst>=8));
+    emit1(c,0x89); emit1(c,modrm(3,src&7,dst&7));
 }
 
 /* ===== vreg操作 ===== */
-static int find_vreg(const char *n){
-    for(int i=0;i<vreg_count;i++) if(!strcmp(vregs[i].name,n)) return i;
+static int find_vreg(CaiContext *c, const char *n){
+    for(int i=0;i<c->vreg_count;i++) if(!strcmp(c->vregs[i].name,n)) return i;
     return -1;
 }
-static int alloc_slot(const char *n){
-    int i=find_vreg(n); if(i>=0) return i;
-    stack_used+=8; vregs[vreg_count].stack_off=-stack_used;
-    vregs[vreg_count].phys_reg=-1; vregs[vreg_count].use_count=0;
-    vregs[vreg_count].is_ptr=strstr(n,".ptr")!=NULL;
-    strncpy(vregs[vreg_count].name,n,MAX_NAME-1);
-    return vreg_count++;
+static int alloc_slot(CaiContext *c, const char *n){
+    int i=find_vreg(c,n); if(i>=0) return i;
+    c->stack_used+=8;
+    c->vregs[c->vreg_count].stack_off=-c->stack_used;
+    c->vregs[c->vreg_count].phys_reg=-1;
+    c->vregs[c->vreg_count].use_count=0;
+    c->vregs[c->vreg_count].is_ptr=strstr(n,".ptr")!=NULL;
+    strncpy(c->vregs[c->vreg_count].name,n,MAX_NAME-1);
+    return c->vreg_count++;
 }
 
-/* EAXをvregに保存 */
-static void store_eax_to(const char *dst){
-    int i=find_vreg(dst); if(i<0) i=alloc_slot(dst);
-    if(vregs[i].phys_reg>=0){
-        int pr=phys_to_reg(vregs[i].phys_reg);
-        if(pr!=EAX) emit_mov_r32(pr,EAX);
-        /* pr==EAX の場合は no-op（EAXがそのまま物理レジスタ） */
+static void store_eax_to(CaiContext *c, const char *dst){
+    int i=find_vreg(c,dst); if(i<0) i=alloc_slot(c,dst);
+    if(c->vregs[i].phys_reg>=0){
+        int pr=phys_to_reg(c->vregs[i].phys_reg);
+        if(pr!=EAX) emit_mov_r32(c,pr,EAX);
     } else {
-        emit_store_r32(EAX, vregs[i].stack_off);
+        emit_store_r32(c,EAX,c->vregs[i].stack_off);
     }
-    set_eax(dst);
+    set_eax(c,dst);
 }
 
-/* vregをEAXに読み込む（peephole付き） */
-static void load_to_eax(const char *val){
-    if(eax_has(val)) return;
+static void load_to_eax(CaiContext *c, const char *val){
+    if(eax_has(c,val)) return;
     if(val[0]=='%'){
-        int i=find_vreg(val);
+        int i=find_vreg(c,val);
         if(i>=0){
-            if(vregs[i].phys_reg>=0){
-                int pr=phys_to_reg(vregs[i].phys_reg);
-                if(pr==EAX){
-                    /* 既にEAXと同じレジスタ → no-op */
-                } else {
-                    emit_mov_r32(EAX,pr);
-                }
+            if(c->vregs[i].phys_reg>=0){
+                int pr=phys_to_reg(c->vregs[i].phys_reg);
+                if(pr!=EAX) emit_mov_r32(c,EAX,pr);
             } else {
-                emit_load_r32(EAX, vregs[i].stack_off);
+                emit_load_r32(c,EAX,c->vregs[i].stack_off);
             }
         } else {
-            emit1(0x31); emit1(0xC0); /* xor eax,eax */
+            emit1(c,0x31); emit1(c,0xC0);
         }
     } else if(is_imm(val)){
         int32_t v=atoi(val);
-        if(v==0){ emit1(0x31); emit1(0xC0); }
-        else emit_mov_r32_imm(EAX, v);
+        if(v==0){ emit1(c,0x31); emit1(c,0xC0); }
+        else emit_mov_r32_imm(c,EAX,v);
     } else {
-        emit1(0x31); emit1(0xC0);
+        emit1(c,0x31); emit1(c,0xC0);
     }
-    set_eax(val);
+    set_eax(c,val);
 }
 
 /* ===== パーサー ===== */
-static void parse_line(char *line){
+static void parse_line(CaiContext *c, char *line){
     trim(line);
-    if(line[0]=='#'||line[0]=='\0'){ instrs[instr_count++].kind=OP_COMMENT; return; }
-    Instr *ins=&instrs[instr_count]; memset(ins,0,sizeof(Instr));
+    if(line[0]=='#'||line[0]=='\0'){ c->instrs[c->instr_count++].kind=OP_COMMENT; return; }
+    Instr *ins=&c->instrs[c->instr_count]; memset(ins,0,sizeof(Instr));
     char *tok=strtok(line," \t"); if(!tok) return;
 
     #define NEXT (tok=strtok(NULL," \t"))
@@ -312,17 +366,14 @@ static void parse_line(char *line){
     } else if(!strcmp(tok,"extern")){
         ins->kind=OP_EXTERN; NEXT; if(tok) strncpy(ins->dst,tok,MAX_NAME-1);
     } else if(!strcmp(tok,"data")){
-        /* data $label "文字列内容" */
         ins->kind=OP_DATA;
-        NEXT; if(tok) strncpy(ins->dst,tok,MAX_NAME-1); /* ラベル名 */
-        /* 残りの行から文字列を取得（ダブルクォート内） */
-        char *rest=strtok(NULL,""); /* 残り全部 */
+        NEXT; if(tok) strncpy(ins->dst,tok,MAX_NAME-1);
+        char *rest=strtok(NULL,"");
         if(rest){
             trim(rest);
             if(rest[0]=='"'){
                 rest++;
                 int slen=0;
-                /* エスケープシーケンス処理 */
                 while(*rest&&*rest!='"'&&slen<511){
                     if(*rest=='\\'&&*(rest+1)){
                         rest++;
@@ -343,368 +394,363 @@ static void parse_line(char *line){
         }
     } else { ins->kind=OP_COMMENT; }
     #undef NEXT
-    instr_count++;
+    c->instr_count++;
 }
 
-static void parse_file(const char *path){
+static void parse_file(CaiContext *c, const char *path){
     FILE *f=fopen(path,"r"); if(!f){perror("fopen");exit(1);}
     char line[512];
-    while(fgets(line,sizeof(line),f)) parse_line(line);
+    while(fgets(line,sizeof(line),f)) parse_line(c,line);
     fclose(f);
 }
 
 /* ===== 関数解析 ===== */
-static int is_leaf(int s,int e){ for(int i=s;i<e;i++) if(instrs[i].kind==OP_CALL) return 0; return 1; }
-static int count_params(int s,int e){
+static int is_leaf(CaiContext *c, int s, int e){
+    for(int i=s;i<e;i++) if(c->instrs[i].kind==OP_CALL) return 0;
+    return 1;
+}
+static int count_params(CaiContext *c, int s, int e){
     int mx=-1;
     for(int i=s;i<e;i++){
-        Instr *ins=&instrs[i];
+        Instr *ins=&c->instrs[i];
         char *ptrs[]={ins->dst,ins->a,ins->b};
         for(int j=0;j<3;j++) if(strncmp(ptrs[j],"%arg",4)==0){ int n=atoi(ptrs[j]+4); if(n>mx) mx=n; }
     }
     return mx+1;
 }
-static void count_uses(int s,int e){
+static void count_uses(CaiContext *c, int s, int e){
     for(int i=s;i<e;i++){
-        Instr *ins=&instrs[i];
-        for(int j=0;j<vreg_count;j++){
-            if(!strcmp(ins->dst,vregs[j].name)) vregs[j].use_count++;
-            if(!strcmp(ins->a,vregs[j].name))   vregs[j].use_count++;
-            if(!strcmp(ins->b,vregs[j].name))   vregs[j].use_count++;
-            for(int k=0;k<ins->argc;k++) if(!strcmp(ins->args[k],vregs[j].name)) vregs[j].use_count++;
+        Instr *ins=&c->instrs[i];
+        for(int j=0;j<c->vreg_count;j++){
+            if(!strcmp(ins->dst,c->vregs[j].name)) c->vregs[j].use_count++;
+            if(!strcmp(ins->a,c->vregs[j].name))   c->vregs[j].use_count++;
+            if(!strcmp(ins->b,c->vregs[j].name))   c->vregs[j].use_count++;
+            for(int k=0;k<ins->argc;k++) if(!strcmp(ins->args[k],c->vregs[j].name)) c->vregs[j].use_count++;
         }
     }
 }
 
-static void init_regalloc(FuncInfo *fn){
-    vreg_count=0; stack_used=0;
-    memset(reg_used,0,sizeof(reg_used));
+static void init_regalloc(CaiContext *c, FuncInfo *fn){
+    c->vreg_count=0; c->stack_used=0;
+    memset(c->reg_used,0,sizeof(c->reg_used));
 
-    /* 全仮想レジスタ収集 */
     for(int i=fn->instr_start;i<fn->instr_end;i++){
-        Instr *ins=&instrs[i];
+        Instr *ins=&c->instrs[i];
         const char *ns[]={ins->dst,ins->a,ins->b};
         for(int j=0;j<3;j++){
             const char *n=ns[j]; if(n[0]!='%') continue;
-            if(find_vreg(n)<0&&vreg_count<MAX_REGS){
-                strncpy(vregs[vreg_count].name,n,MAX_NAME-1);
-                vregs[vreg_count].phys_reg=-1; vregs[vreg_count].use_count=0;
-                vregs[vreg_count].is_ptr=strstr(n,".ptr")!=NULL;
-                vreg_count++;
+            if(find_vreg(c,n)<0&&c->vreg_count<MAX_REGS){
+                strncpy(c->vregs[c->vreg_count].name,n,MAX_NAME-1);
+                c->vregs[c->vreg_count].phys_reg=-1;
+                c->vregs[c->vreg_count].use_count=0;
+                c->vregs[c->vreg_count].is_ptr=strstr(n,".ptr")!=NULL;
+                c->vreg_count++;
             }
         }
         for(int j=0;j<ins->argc;j++){
             const char *n=ins->args[j]; if(n[0]!='%') continue;
-            if(find_vreg(n)<0&&vreg_count<MAX_REGS){
-                strncpy(vregs[vreg_count].name,n,MAX_NAME-1);
-                vregs[vreg_count].phys_reg=-1; vregs[vreg_count].use_count=0;
-                vregs[vreg_count].is_ptr=strstr(n,".ptr")!=NULL;
-                vreg_count++;
+            if(find_vreg(c,n)<0&&c->vreg_count<MAX_REGS){
+                strncpy(c->vregs[c->vreg_count].name,n,MAX_NAME-1);
+                c->vregs[c->vreg_count].phys_reg=-1;
+                c->vregs[c->vreg_count].use_count=0;
+                c->vregs[c->vreg_count].is_ptr=strstr(n,".ptr")!=NULL;
+                c->vreg_count++;
             }
         }
     }
-    count_uses(fn->instr_start,fn->instr_end);
+    count_uses(c,fn->instr_start,fn->instr_end);
 
-    /* leaf関数のみレジスタ割り当て（use_count>=2、非ポインタ、非引数） */
     if(fn->is_leaf){
-        for(int i=0;i<vreg_count-1;i++)
-            for(int j=i+1;j<vreg_count;j++)
-                if(vregs[j].use_count>vregs[i].use_count){ VReg t=vregs[i];vregs[i]=vregs[j];vregs[j]=t; }
+        for(int i=0;i<c->vreg_count-1;i++)
+            for(int j=i+1;j<c->vreg_count;j++)
+                if(c->vregs[j].use_count>c->vregs[i].use_count){
+                    VReg t=c->vregs[i]; c->vregs[i]=c->vregs[j]; c->vregs[j]=t;
+                }
         int ri=0;
-        for(int i=0;i<vreg_count&&ri<NUM_ALLOC_REGS;i++)
-            if(vregs[i].use_count>=2&&!vregs[i].is_ptr&&strncmp(vregs[i].name,"%arg",4)){
-                vregs[i].phys_reg=ri++; reg_used[vregs[i].phys_reg]=1;
+        for(int i=0;i<c->vreg_count&&ri<NUM_ALLOC_REGS;i++)
+            if(c->vregs[i].use_count>=2&&!c->vregs[i].is_ptr&&strncmp(c->vregs[i].name,"%arg",4)){
+                c->vregs[i].phys_reg=ri++; c->reg_used[c->vregs[i].phys_reg]=1;
             }
     }
 
-    /* スタック割り当て */
-    for(int i=0;i<vreg_count;i++){
-        if(vregs[i].phys_reg>=0) continue;
-        stack_used+=8; vregs[i].stack_off=-stack_used;
+    for(int i=0;i<c->vreg_count;i++){
+        if(c->vregs[i].phys_reg>=0) continue;
+        c->stack_used+=8; c->vregs[i].stack_off=-c->stack_used;
     }
-    /* 引数スロット追加 */
     for(int i=0;i<6;i++){
         char an[MAX_NAME]; snprintf(an,MAX_NAME,"%%arg%d",i);
-        if(find_vreg(an)<0&&vreg_count<MAX_REGS){
-            strncpy(vregs[vreg_count].name,an,MAX_NAME-1);
-            stack_used+=8; vregs[vreg_count].stack_off=-stack_used;
-            vregs[vreg_count].phys_reg=-1; vreg_count++;
+        if(find_vreg(c,an)<0&&c->vreg_count<MAX_REGS){
+            strncpy(c->vregs[c->vreg_count].name,an,MAX_NAME-1);
+            c->stack_used+=8;
+            c->vregs[c->vreg_count].stack_off=-c->stack_used;
+            c->vregs[c->vreg_count].phys_reg=-1;
+            c->vreg_count++;
         }
     }
-    stack_used=(stack_used+15)&~15;
-    fn->stack_size=stack_used;
+    c->stack_used=(c->stack_used+15)&~15;
+    fn->stack_size=c->stack_used;
 }
 
 /* ===== ラベル操作 ===== */
-static void label_def(const char *name){
-    strncpy(labels[label_count].name,name,MAX_NAME-1);
-    labels[label_count].off=code_size;
-    label_count++;
+static void label_def(CaiContext *c, const char *name){
+    strncpy(c->labels[c->label_count].name,name,MAX_NAME-1);
+    c->labels[c->label_count].off=c->code_size;
+    c->label_count++;
 }
-static int label_find(const char *name){
-    for(int i=0;i<label_count;i++) if(!strcmp(labels[i].name,name)) return labels[i].off;
+static int label_find(CaiContext *c, const char *name){
+    for(int i=0;i<c->label_count;i++) if(!strcmp(c->labels[i].name,name)) return c->labels[i].off;
     return -1;
 }
-static void lpatch_add(int coff, const char *name){
-    strncpy(lpatches[lpatch_count].name,name,MAX_NAME-1);
-    lpatches[lpatch_count].code_off=coff;
-    lpatch_count++;
+static void lpatch_add(CaiContext *c, int coff, const char *name){
+    strncpy(c->lpatches[c->lpatch_count].name,name,MAX_NAME-1);
+    c->lpatches[c->lpatch_count].code_off=coff;
+    c->lpatch_count++;
 }
-static void resolve_labels(){
-    for(int i=0;i<lpatch_count;i++){
-        int off=label_find(lpatches[i].name);
-        if(off<0){ fprintf(stderr,"未解決ラベル: %s\n",lpatches[i].name); continue; }
-        int32_t rel=off-(lpatches[i].code_off+4);
-        patch_i32(lpatches[i].code_off, rel);
+static void resolve_labels(CaiContext *c){
+    for(int i=0;i<c->lpatch_count;i++){
+        int off=label_find(c,c->lpatches[i].name);
+        if(off<0){ fprintf(stderr,"未解決ラベル: %s\n",c->lpatches[i].name); continue; }
+        int32_t rel=off-(c->lpatches[i].code_off+4);
+        patch_i32(c,c->lpatches[i].code_off,rel);
     }
 }
 
 /* ===== シンボル操作 ===== */
-static void sym_define(const char *name, int off, int global){
-    int i; for(i=0;i<sym_count;i++) if(!strcmp(syms[i].name,name)) break;
-    if(i==sym_count){ strncpy(syms[i].name,name,MAX_NAME-1); sym_count++; }
-    syms[i].off=off; syms[i].defined=1; syms[i].global=global;
+static void sym_define(CaiContext *c, const char *name, int off, int global){
+    int i; for(i=0;i<c->sym_count;i++) if(!strcmp(c->syms[i].name,name)) break;
+    if(i==c->sym_count){ strncpy(c->syms[i].name,name,MAX_NAME-1); c->sym_count++; }
+    c->syms[i].off=off; c->syms[i].defined=1; c->syms[i].global=global;
 }
-static int sym_find2(const char *name){
-    for(int i=0;i<sym_count;i++) if(!strcmp(syms[i].name,name)) return i;
+static int sym_find2(CaiContext *c, const char *name){
+    for(int i=0;i<c->sym_count;i++) if(!strcmp(c->syms[i].name,name)) return i;
     return -1;
 }
-static void sym_ref(const char *name){
-    if(sym_find2(name)<0){
-        strncpy(syms[sym_count].name,name,MAX_NAME-1);
-        syms[sym_count].defined=0; syms[sym_count].global=1; sym_count++;
+static void sym_ref(CaiContext *c, const char *name){
+    if(sym_find2(c,name)<0){
+        strncpy(c->syms[c->sym_count].name,name,MAX_NAME-1);
+        c->syms[c->sym_count].defined=0;
+        c->syms[c->sym_count].global=1;
+        c->sym_count++;
     }
 }
 
 /* ===== 関数コード生成 ===== */
-static void gen_func(FuncInfo *fn){
-    fn->is_leaf=is_leaf(fn->instr_start,fn->instr_end);
-    fn->param_count=count_params(fn->instr_start,fn->instr_end);
-    init_regalloc(fn);
+static void gen_func(CaiContext *c, FuncInfo *fn){
+    fn->is_leaf=is_leaf(c,fn->instr_start,fn->instr_end);
+    fn->param_count=count_params(c,fn->instr_start,fn->instr_end);
+    init_regalloc(c,fn);
 
-    /* 関数名（main→sim_main） */
     char fname[MAX_NAME];
     const char *raw=fn->name; if(raw[0]=='$') raw++;
-    strncpy(fname, !strcmp(raw,"main")?"sim_main":raw, MAX_NAME-1);
+    strncpy(fname,!strcmp(raw,"main")?"sim_main":raw,MAX_NAME-1);
     if(!strcmp(raw,"main")) fn->is_export=1;
 
-    sym_define(fname, code_size, fn->is_export);
+    sym_define(c,fname,c->code_size,fn->is_export);
 
     /* プロローグ */
-    emit1(0x55);                         /* push rbp */
-    emit2(0x48,0x89); emit1(modrm(3,RSP,RBP)); /* mov rbp,rsp */
-    /* sub rsp, stack_size+16 */
+    emit1(c,0x55);
+    emit2(c,0x48,0x89); emit1(c,modrm(3,RSP,RBP));
     int ss=fn->stack_size+64;
-    emit3(0x48,0x81,0xEC); emit_i32(ss);
+    emit3(c,0x48,0x81,0xEC); emit_i32(c,ss);
 
-    /* callee-saved退避 */
-    for(int i=0;i<NUM_ALLOC_REGS;i++) if(reg_used[i]) emit_push(phys_to_reg(i));
+    for(int i=0;i<NUM_ALLOC_REGS;i++) if(c->reg_used[i]) emit_push(c,phys_to_reg(i));
 
-    /* 引数を退避 */
     for(int i=0;i<fn->param_count&&i<6;i++){
         char an[MAX_NAME]; snprintf(an,MAX_NAME,"%%arg%d",i);
-        int idx=find_vreg(an);
+        int idx=find_vreg(c,an);
         if(idx>=0){
-            if(vregs[idx].phys_reg>=0)
-                emit_mov_r32(phys_to_reg(vregs[idx].phys_reg), argregs64[i]);
+            if(c->vregs[idx].phys_reg>=0)
+                emit_mov_r32(c,phys_to_reg(c->vregs[idx].phys_reg),argregs64[i]);
             else
-                emit_store_r32(argregs64[i], vregs[idx].stack_off);
+                emit_store_r32(c,argregs64[i],c->vregs[idx].stack_off);
         }
     }
 
-    reset_eax();
-    label_count=0; lpatch_count=0;
+    reset_eax(c);
+    c->label_count=0; c->lpatch_count=0;
 
     for(int i=fn->instr_start;i<fn->instr_end;i++){
-        Instr *ins=&instrs[i];
+        Instr *ins=&c->instrs[i];
         switch(ins->kind){
         case OP_COMMENT: break;
-        case OP_ALLOC: { int idx=find_vreg(ins->dst); if(idx<0) alloc_slot(ins->dst); break; }
+        case OP_ALLOC: { int idx=find_vreg(c,ins->dst); if(idx<0) alloc_slot(c,ins->dst); break; }
 
         case OP_STORE: {
-            load_to_eax(ins->a);
-            int idx=find_vreg(ins->dst); if(idx<0) idx=alloc_slot(ins->dst);
-            if(vregs[idx].phys_reg>=0){
-                int pr=phys_to_reg(vregs[idx].phys_reg);
-                if(pr!=EAX) emit_mov_r32(pr,EAX);
-                /* スタックには書かない */
+            load_to_eax(c,ins->a);
+            int idx=find_vreg(c,ins->dst); if(idx<0) idx=alloc_slot(c,ins->dst);
+            if(c->vregs[idx].phys_reg>=0){
+                int pr=phys_to_reg(c->vregs[idx].phys_reg);
+                if(pr!=EAX) emit_mov_r32(c,pr,EAX);
             } else {
-                emit_store_r32(EAX, vregs[idx].stack_off);
+                emit_store_r32(c,EAX,c->vregs[idx].stack_off);
             }
-            set_eax(ins->dst);
+            set_eax(c,ins->dst);
             break;
         }
 
         case OP_LOAD: {
-            int si=find_vreg(ins->a);
-            if(eax_has(ins->a)){
-                store_eax_to(ins->dst);
+            int si=find_vreg(c,ins->a);
+            if(eax_has(c,ins->a)){
+                store_eax_to(c,ins->dst);
             } else if(si>=0){
-                if(vregs[si].phys_reg>=0){ int pr=phys_to_reg(vregs[si].phys_reg); if(pr!=EAX) emit_mov_r32(EAX,pr); }
-                else emit_load_r32(EAX, vregs[si].stack_off);
-                store_eax_to(ins->dst);
+                if(c->vregs[si].phys_reg>=0){
+                    int pr=phys_to_reg(c->vregs[si].phys_reg);
+                    if(pr!=EAX) emit_mov_r32(c,EAX,pr);
+                } else {
+                    emit_load_r32(c,EAX,c->vregs[si].stack_off);
+                }
+                store_eax_to(c,ins->dst);
             } else {
-                emit1(0x31); emit1(0xC0);
-                store_eax_to(ins->dst);
+                emit1(c,0x31); emit1(c,0xC0);
+                store_eax_to(c,ins->dst);
             }
             break;
         }
 
         case OP_ADD: {
-            load_to_eax(ins->a);
+            load_to_eax(c,ins->a);
             if(is_imm(ins->b)){
                 int v=atoi(ins->b);
-                if(v==1){ emit1(0xFF); emit1(0xC0); } /* inc eax */
-                else if(v==-1){ emit1(0xFF); emit1(0xC8); } /* dec eax */
-                else if(v>=-128&&v<=127){ emit2(0x83,0xC0); emit1((int8_t)v); }
-                else { emit1(0x05); emit_i32(v); }
+                if(v==1){ emit1(c,0xFF); emit1(c,0xC0); }
+                else if(v==-1){ emit1(c,0xFF); emit1(c,0xC8); }
+                else if(v>=-128&&v<=127){ emit2(c,0x83,0xC0); emit1(c,(uint8_t)(int8_t)v); }
+                else { emit1(c,0x05); emit_i32(c,v); }
             } else {
-                emit_mov_r32(ECX,EAX);
-                load_to_eax(ins->b);
-                emit2(0x01,0xC8); /* add eax,ecx */
+                emit_mov_r32(c,ECX,EAX);
+                load_to_eax(c,ins->b);
+                emit2(c,0x01,0xC8);
             }
-            reset_eax(); store_eax_to(ins->dst);
+            reset_eax(c); store_eax_to(c,ins->dst);
             break;
         }
 
         case OP_SUB: {
             if(is_imm(ins->a)&&atoi(ins->a)==0){
-                load_to_eax(ins->b);
-                emit2(0xF7,0xD8); /* neg eax */
+                load_to_eax(c,ins->b);
+                emit2(c,0xF7,0xD8);
             } else {
-                load_to_eax(ins->a);
+                load_to_eax(c,ins->a);
                 if(is_imm(ins->b)){
                     int v=atoi(ins->b);
-                    if(v==1){ emit1(0xFF); emit1(0xC8); }
-                    else if(v>=-128&&v<=127){ emit2(0x83,0xE8); emit1((int8_t)v); }
-                    else { emit1(0x2D); emit_i32(v); }
+                    if(v==1){ emit1(c,0xFF); emit1(c,0xC8); }
+                    else if(v>=-128&&v<=127){ emit2(c,0x83,0xE8); emit1(c,(uint8_t)(int8_t)v); }
+                    else { emit1(c,0x2D); emit_i32(c,v); }
                 } else {
-                    emit_mov_r32(ECX,EAX);
-                    load_to_eax(ins->b);
-                    emit2(0x29,0xC1); /* sub ecx,eax */
-                    emit2(0x89,0xC8); /* mov eax,ecx */
+                    emit_mov_r32(c,ECX,EAX);
+                    load_to_eax(c,ins->b);
+                    emit2(c,0x29,0xC1);
+                    emit2(c,0x89,0xC8);
                 }
             }
-            reset_eax(); store_eax_to(ins->dst);
+            reset_eax(c); store_eax_to(c,ins->dst);
             break;
         }
 
         case OP_MUL: {
-            load_to_eax(ins->a);
-            emit_mov_r32(ECX,EAX);
-            load_to_eax(ins->b);
-            emit3(0x0F,0xAF,0xC1); /* imul eax,ecx */
-            reset_eax(); store_eax_to(ins->dst);
+            load_to_eax(c,ins->a);
+            emit_mov_r32(c,ECX,EAX);
+            load_to_eax(c,ins->b);
+            emit3(c,0x0F,0xAF,0xC1);
+            reset_eax(c); store_eax_to(c,ins->dst);
             break;
         }
 
         case OP_DIV: {
-            load_to_eax(ins->a);
-            emit_mov_r32(ECX,EAX);
-            load_to_eax(ins->b);
-            emit2(0x87,0xC1); /* xchg eax,ecx */
-            emit1(0x99);      /* cdq */
-            emit2(0xF7,0xF9); /* idiv ecx */
-            reset_eax(); store_eax_to(ins->dst);
+            load_to_eax(c,ins->a);
+            emit_mov_r32(c,ECX,EAX);
+            load_to_eax(c,ins->b);
+            emit2(c,0x87,0xC1);
+            emit1(c,0x99);
+            emit2(c,0xF7,0xF9);
+            reset_eax(c); store_eax_to(c,ins->dst);
             break;
         }
 
         case OP_CLT: case OP_CLE: case OP_CEQ:
         case OP_CNE: case OP_CGT: case OP_CGE: {
-            load_to_eax(ins->a);
+            load_to_eax(c,ins->a);
             if(is_imm(ins->b)){
                 int v=atoi(ins->b);
-                if(v>=-128&&v<=127){ emit2(0x83,0xF8); emit1((int8_t)v); }
-                else { emit1(0x3D); emit_i32(v); }
+                if(v>=-128&&v<=127){ emit2(c,0x83,0xF8); emit1(c,(uint8_t)(int8_t)v); }
+                else { emit1(c,0x3D); emit_i32(c,v); }
             } else {
-                emit_mov_r32(ECX,EAX);
-                load_to_eax(ins->b);
-                emit2(0x39,0xC1); /* cmp ecx,eax */
+                emit_mov_r32(c,ECX,EAX);
+                load_to_eax(c,ins->b);
+                emit2(c,0x39,0xC1);
             }
             uint8_t cc[]={0x9C,0x9E,0x94,0x95,0x9F,0x9D};
             int ci=ins->kind-OP_CLT;
-            emit3(0x0F,cc[ci],0xC0); /* setcc al */
-            emit3(0x0F,0xB6,0xC0);   /* movzx eax,al */
-            reset_eax(); store_eax_to(ins->dst);
+            emit3(c,0x0F,cc[ci],0xC0);
+            emit3(c,0x0F,0xB6,0xC0);
+            reset_eax(c); store_eax_to(c,ins->dst);
             break;
         }
 
         case OP_LABEL:
-            /* ラベル到達時、物理レジスタに入っている値はそのまま有効
-               スタックの値は不明（他のパスから来る可能性）*/
-            reset_eax();
-            label_def(ins->dst);
+            reset_eax(c);
+            label_def(c,ins->dst);
             break;
 
         case OP_JMP:
-            reset_eax();
-            { emit1(0xE9); int po=code_size; emit_i32(0); lpatch_add(po,ins->dst); }
+            reset_eax(c);
+            { emit1(c,0xE9); int po=c->code_size; emit_i32(c,0); lpatch_add(c,po,ins->dst); }
             break;
 
         case OP_JNZ: {
-            load_to_eax(ins->dst);
-            emit2(0x85,0xC0); /* test eax,eax */
-            /* jnz true */
-            emit2(0x0F,0x85); int pt=code_size; emit_i32(0); lpatch_add(pt,ins->a);
-            /* jmp false */
-            emit1(0xE9); int pf=code_size; emit_i32(0); lpatch_add(pf,ins->b);
-            reset_eax();
+            load_to_eax(c,ins->dst);
+            emit2(c,0x85,0xC0);
+            emit2(c,0x0F,0x85); int pt=c->code_size; emit_i32(c,0); lpatch_add(c,pt,ins->a);
+            emit1(c,0xE9);      int pf=c->code_size; emit_i32(c,0); lpatch_add(c,pf,ins->b);
+            reset_eax(c);
             break;
         }
 
         case OP_CALL: {
-            /* callee-saved退避 */
-            for(int j=0;j<NUM_ALLOC_REGS;j++) if(reg_used[j]) emit_push(phys_to_reg(j));
-            /* 引数設定 */
+            for(int j=0;j<NUM_ALLOC_REGS;j++) if(c->reg_used[j]) emit_push(c,phys_to_reg(j));
             for(int j=0;j<ins->argc&&j<6;j++){
-                load_to_eax(ins->args[j]);
-                /* movsx arg_reg64, eax */
+                load_to_eax(c,ins->args[j]);
                 int ar=argregs64[j];
-                emit1(ar>=8?0x4C:0x48); emit1(0x63);
-                emit1(modrm(3,ar&7,EAX));
+                emit1(c,(uint8_t)(ar>=8?0x4C:0x48)); emit1(c,0x63);
+                emit1(c,modrm(3,ar&7,EAX));
             }
-            reset_eax();
-            /* call rel32 */
+            reset_eax(c);
             const char *callee=ins->a; if(callee[0]=='$') callee++;
             char cn[MAX_NAME]; strncpy(cn,!strcmp(callee,"main")?"sim_main":callee,MAX_NAME-1);
-            sym_ref(cn);
-            emit1(0xE8); int po=code_size; emit_i32(0);
-            patches[patch_count].code_off=po;
-            strncpy(patches[patch_count].sym,cn,MAX_NAME-1);
-            patch_count++;
-            /* callee-saved復元 */
-            for(int j=NUM_ALLOC_REGS-1;j>=0;j--) if(reg_used[j]) emit_pop(phys_to_reg(j));
-            if(ins->dst[0]&&ins->dst[0]!='_') store_eax_to(ins->dst);
-            else reset_eax();
+            sym_ref(c,cn);
+            emit1(c,0xE8); int po=c->code_size; emit_i32(c,0);
+            c->patches[c->patch_count].code_off=po;
+            strncpy(c->patches[c->patch_count].sym,cn,MAX_NAME-1);
+            c->patch_count++;
+            for(int j=NUM_ALLOC_REGS-1;j>=0;j--) if(c->reg_used[j]) emit_pop(c,phys_to_reg(j));
+            if(ins->dst[0]&&ins->dst[0]!='_') store_eax_to(c,ins->dst);
+            else reset_eax(c);
             break;
         }
 
         case OP_RET: {
-            load_to_eax(ins->dst);
-            /* movsx rax, eax */
-            emit3(0x48,0x63,0xC0);
-            for(int j=NUM_ALLOC_REGS-1;j>=0;j--) if(reg_used[j]) emit_pop(phys_to_reg(j));
-            emit1(0xC9); emit1(0xC3); /* leave; ret */
-            reset_eax();
+            load_to_eax(c,ins->dst);
+            emit3(c,0x48,0x63,0xC0);
+            for(int j=NUM_ALLOC_REGS-1;j>=0;j--) if(c->reg_used[j]) emit_pop(c,phys_to_reg(j));
+            emit1(c,0xC9); emit1(c,0xC3);
+            reset_eax(c);
             break;
         }
 
         case OP_RETV:
-            emit2(0x31,0xC0); /* xor eax,eax */
-            for(int j=NUM_ALLOC_REGS-1;j>=0;j--) if(reg_used[j]) emit_pop(phys_to_reg(j));
-            emit1(0xC9); emit1(0xC3);
-            reset_eax();
+            emit2(c,0x31,0xC0);
+            for(int j=NUM_ALLOC_REGS-1;j>=0;j--) if(c->reg_used[j]) emit_pop(c,phys_to_reg(j));
+            emit1(c,0xC9); emit1(c,0xC3);
+            reset_eax(c);
             break;
 
         default: break;
         }
     }
 
-    resolve_labels();
+    resolve_labels(c);
 }
 
 /* ===== ELFオブジェクトファイル(.o)生成 ===== */
-/* ld互換のrelocatable ELF64を出力 */
 typedef struct {
     uint8_t  e_ident[16]; uint16_t e_type,e_machine; uint32_t e_version;
     uint64_t e_entry,e_phoff,e_shoff; uint32_t e_flags;
@@ -718,265 +764,120 @@ typedef struct {
     uint32_t st_name; uint8_t st_info,st_other; uint16_t st_shndx;
     uint64_t st_value,st_size;
 } Elf64Sym;
-typedef struct {
-    uint64_t r_offset; uint32_t r_type; int32_t r_addend;
-    /* actually r_info=uint64 but we split for clarity */
-} Elf64Rela_raw;
 
-/* リロケーション: R_X86_64_PC32 = 2 */
-#define R_X86_64_PC32 2
 #define R_X86_64_PLT32 4
 
-static void write_obj(const char *path){
-    /* セクション: null, .text, .rela.text, .symtab, .strtab, .shstrtab */
-    /* 1. シンボル文字列テーブルを構築 */
+static void write_obj(CaiContext *c, const char *path){
     uint8_t strtab[65536]; int strtab_size=1; strtab[0]=0;
     int sym_stridx[MAX_FUNCS*2];
-    for(int i=0;i<sym_count;i++){
+    for(int i=0;i<c->sym_count;i++){
         sym_stridx[i]=strtab_size;
-        int len=strlen(syms[i].name);
-        memcpy(strtab+strtab_size, syms[i].name, len+1);
+        int len=strlen(c->syms[i].name);
+        memcpy(strtab+strtab_size,c->syms[i].name,len+1);
         strtab_size+=len+1;
     }
 
-    /* 2. シンボルテーブル構築 */
-    /* 最初にlocal（STB_LOCAL）、次にglobal（STB_GLOBAL） */
     Elf64Sym elf_syms[MAX_FUNCS*2+1];
     int elf_sym_count=0;
-    memset(&elf_syms[0],0,sizeof(Elf64Sym)); elf_sym_count=1; /* null sym */
+    memset(&elf_syms[0],0,sizeof(Elf64Sym)); elf_sym_count=1;
     int first_global=1;
-    /* local syms */
-    for(int i=0;i<sym_count;i++){
-        if(syms[i].global) continue;
+    for(int i=0;i<c->sym_count;i++){
+        if(c->syms[i].global) continue;
         Elf64Sym *s=&elf_syms[elf_sym_count++];
         s->st_name=sym_stridx[i];
-        s->st_info=(0<<4)|2; /* STB_LOCAL|STT_FUNC */
-        s->st_shndx=1; /* .text */
-        s->st_value=syms[i].defined?syms[i].off:0;
-        s->st_size=0;
+        s->st_info=(0<<4)|2;
+        s->st_shndx=1;
+        s->st_value=c->syms[i].defined?(uint64_t)c->syms[i].off:0;
     }
     first_global=elf_sym_count;
-    /* global syms */
-    for(int i=0;i<sym_count;i++){
-        if(!syms[i].global) continue;
+    for(int i=0;i<c->sym_count;i++){
+        if(!c->syms[i].global) continue;
         Elf64Sym *s=&elf_syms[elf_sym_count++];
         s->st_name=sym_stridx[i];
-        s->st_info=(1<<4)|2; /* STB_GLOBAL|STT_FUNC */
-        s->st_shndx=syms[i].defined?1:0; /* 1=.text, 0=UND */
-        s->st_value=syms[i].defined?syms[i].off:0;
-        s->st_size=0;
+        s->st_info=(1<<4)|2;
+        s->st_shndx=c->syms[i].defined?1:0;
+        s->st_value=c->syms[i].defined?(uint64_t)c->syms[i].off:0;
     }
 
-    /* グローバルシンボルのelf_sym内インデックスを取得する関数 */
-    /* パッチ適用のためにシンボル名→elfシンボルインデックスが必要 */
-    /* 3. リロケーションテーブル構築 */
     typedef struct { uint64_t r_offset; uint64_t r_info; int64_t r_addend; } Rela64;
     Rela64 relas[MAX_PATCHES]; int rela_count=0;
-    for(int i=0;i<patch_count;i++){
-        /* シンボルをelfシンボルテーブルで探す */
+    for(int i=0;i<c->patch_count;i++){
         int esi=-1;
         for(int j=1;j<elf_sym_count;j++)
-            if(!strcmp(strtab+elf_syms[j].st_name, patches[i].sym)){ esi=j; break; }
+            if(!strcmp((char*)strtab+elf_syms[j].st_name,c->patches[i].sym)){ esi=j; break; }
         if(esi<0){
-            /* 未登録グローバルシンボルを追加 */
             Elf64Sym *s=&elf_syms[elf_sym_count];
-            /* strtabに追加 */
-            int nl=strlen(patches[i].sym);
+            int nl=strlen(c->patches[i].sym);
             int nsi=strtab_size;
-            memcpy(strtab+strtab_size,patches[i].sym,nl+1); strtab_size+=nl+1;
-            s->st_name=nsi;
+            memcpy(strtab+strtab_size,c->patches[i].sym,nl+1); strtab_size+=nl+1;
+            s->st_name=(uint32_t)nsi;
             s->st_info=(1<<4)|2; s->st_shndx=0; s->st_value=0;
             esi=elf_sym_count++;
         }
-        relas[rela_count].r_offset=patches[i].code_off;
+        relas[rela_count].r_offset=(uint64_t)c->patches[i].code_off;
         relas[rela_count].r_info=((uint64_t)esi<<32)|R_X86_64_PLT32;
         relas[rela_count].r_addend=-4;
         rela_count++;
     }
 
-    /* 4. セクション文字列テーブル */
     const char shstrtab[]="\0.text\0.rela.text\0.symtab\0.strtab\0.shstrtab\0";
     int sh_text=1, sh_rela=7, sh_sym=18, sh_str=26, sh_shstr=34;
 
-    /* 5. レイアウト計算 */
     uint64_t off=sizeof(Elf64Ehdr);
-    /* no program headers in .o */
-    uint64_t text_off=off; uint64_t text_sz=code_size; off+=text_sz;
-    off=(off+7)&~7;
-    uint64_t rela_off=off; uint64_t rela_sz=rela_count*sizeof(Rela64); off+=rela_sz;
-    off=(off+7)&~7;
-    uint64_t sym_off=off;  uint64_t sym_sz=elf_sym_count*sizeof(Elf64Sym); off+=sym_sz;
-    off=(off+7)&~7;
-    uint64_t str_off=off;  uint64_t str_sz=strtab_size; off+=str_sz;
-    off=(off+7)&~7;
+    uint64_t text_off=off; uint64_t text_sz=(uint64_t)c->code_size; off+=text_sz;
+    off=align_up(off,8);
+    uint64_t rela_off=off; uint64_t rela_sz=(uint64_t)(rela_count*sizeof(Rela64)); off+=rela_sz;
+    off=align_up(off,8);
+    uint64_t sym_off=off;  uint64_t sym_sz=(uint64_t)(elf_sym_count*sizeof(Elf64Sym)); off+=sym_sz;
+    off=align_up(off,8);
+    uint64_t str_off=off;  uint64_t str_sz=(uint64_t)strtab_size; off+=str_sz;
+    off=align_up(off,8);
     uint64_t shstr_off=off; uint64_t shstr_sz=sizeof(shstrtab); off+=shstr_sz;
-    off=(off+7)&~7;
+    off=align_up(off,8);
     uint64_t shoff=off;
 
-    /* 6. ELFヘッダ */
     FILE *f=fopen(path,"wb"); if(!f){perror("fopen obj");return;}
     Elf64Ehdr eh; memset(&eh,0,sizeof(eh));
     memcpy(eh.e_ident,"\x7f" "ELF",4);
-    eh.e_ident[4]=2;eh.e_ident[5]=1;eh.e_ident[6]=1;
-    eh.e_type=1; /* ET_REL */
-    eh.e_machine=62; /* EM_X86_64 */
-    eh.e_version=1;
+    eh.e_ident[4]=2; eh.e_ident[5]=1; eh.e_ident[6]=1;
+    eh.e_type=1; eh.e_machine=62; eh.e_version=1;
     eh.e_ehsize=sizeof(Elf64Ehdr);
     eh.e_shentsize=sizeof(Elf64Shdr);
-    eh.e_shnum=6; /* null,.text,.rela.text,.symtab,.strtab,.shstrtab */
-    eh.e_shstrndx=5;
-    eh.e_shoff=shoff;
+    eh.e_shnum=6; eh.e_shstrndx=5; eh.e_shoff=shoff;
     fwrite(&eh,sizeof(eh),1,f);
 
-    /* 7. セクションデータ */
-    fwrite(code,1,code_size,f);
-    /* padding */
+    fwrite(c->code,1,c->code_size,f);
     uint8_t zeros[16]={0};
-    int pad=(int)(rela_off-(text_off+text_sz)); if(pad>0) fwrite(zeros,1,pad,f);
-    fwrite(relas,sizeof(Rela64),rela_count,f);
-    pad=(int)(sym_off-(rela_off+rela_sz)); if(pad>0) fwrite(zeros,1,pad,f);
-    fwrite(elf_syms,sizeof(Elf64Sym),elf_sym_count,f);
-    pad=(int)(str_off-(sym_off+sym_sz)); if(pad>0) fwrite(zeros,1,pad,f);
-    fwrite(strtab,1,strtab_size,f);
-    pad=(int)(shstr_off-(str_off+str_sz)); if(pad>0) fwrite(zeros,1,pad,f);
+    int pad=(int)(rela_off-(text_off+text_sz)); if(pad>0) fwrite(zeros,1,(size_t)pad,f);
+    fwrite(relas,sizeof(Rela64),(size_t)rela_count,f);
+    pad=(int)(sym_off-(rela_off+rela_sz)); if(pad>0) fwrite(zeros,1,(size_t)pad,f);
+    fwrite(elf_syms,sizeof(Elf64Sym),(size_t)elf_sym_count,f);
+    pad=(int)(str_off-(sym_off+sym_sz)); if(pad>0) fwrite(zeros,1,(size_t)pad,f);
+    fwrite(strtab,1,(size_t)strtab_size,f);
+    pad=(int)(shstr_off-(str_off+str_sz)); if(pad>0) fwrite(zeros,1,(size_t)pad,f);
     fwrite(shstrtab,1,shstr_sz,f);
-    pad=(int)(shoff-(shstr_off+shstr_sz)); if(pad>0) fwrite(zeros,1,pad,f);
+    pad=(int)(shoff-(shstr_off+shstr_sz)); if(pad>0) fwrite(zeros,1,(size_t)pad,f);
 
-    /* 8. セクションヘッダ */
     Elf64Shdr shdrs[6]; memset(shdrs,0,sizeof(shdrs));
-    /* null */
-    /* .text */
-    shdrs[1].sh_name=sh_text; shdrs[1].sh_type=1; /* SHT_PROGBITS */
-    shdrs[1].sh_flags=6; /* SHF_ALLOC|SHF_EXECINSTR */
+    shdrs[1].sh_name=(uint32_t)sh_text; shdrs[1].sh_type=1; shdrs[1].sh_flags=6;
     shdrs[1].sh_off=text_off; shdrs[1].sh_size=text_sz; shdrs[1].sh_align=16;
-    /* .rela.text */
-    shdrs[2].sh_name=sh_rela; shdrs[2].sh_type=4; /* SHT_RELA */
-    shdrs[2].sh_flags=0x40; /* SHF_INFO_LINK */
+    shdrs[2].sh_name=(uint32_t)sh_rela; shdrs[2].sh_type=4; shdrs[2].sh_flags=0x40;
     shdrs[2].sh_off=rela_off; shdrs[2].sh_size=rela_sz;
-    shdrs[2].sh_link=3; shdrs[2].sh_info=1; /* link=.symtab, info=.text idx */
+    shdrs[2].sh_link=3; shdrs[2].sh_info=1;
     shdrs[2].sh_align=8; shdrs[2].sh_entsize=sizeof(Rela64);
-    /* .symtab */
-    shdrs[3].sh_name=sh_sym; shdrs[3].sh_type=2; /* SHT_SYMTAB */
+    shdrs[3].sh_name=(uint32_t)sh_sym; shdrs[3].sh_type=2;
     shdrs[3].sh_off=sym_off; shdrs[3].sh_size=sym_sz;
-    shdrs[3].sh_link=4; shdrs[3].sh_info=first_global;
+    shdrs[3].sh_link=4; shdrs[3].sh_info=(uint32_t)first_global;
     shdrs[3].sh_align=8; shdrs[3].sh_entsize=sizeof(Elf64Sym);
-    /* .strtab */
-    shdrs[4].sh_name=sh_str; shdrs[4].sh_type=3; /* SHT_STRTAB */
+    shdrs[4].sh_name=(uint32_t)sh_str; shdrs[4].sh_type=3;
     shdrs[4].sh_off=str_off; shdrs[4].sh_size=str_sz; shdrs[4].sh_align=1;
-    /* .shstrtab */
-    shdrs[5].sh_name=sh_shstr; shdrs[5].sh_type=3;
+    shdrs[5].sh_name=(uint32_t)sh_shstr; shdrs[5].sh_type=3;
     shdrs[5].sh_off=shstr_off; shdrs[5].sh_size=shstr_sz; shdrs[5].sh_align=1;
     fwrite(shdrs,sizeof(Elf64Shdr),6,f);
     fclose(f);
 }
 
-/* ===== syscallラッパーとmainを機械語で直接生成 ===== */
-
-#define SYS_write        1
-#define SYS_clock_gettime 228
-#define SYS_exit         60
-
-/* mov rax, imm64 */
-static void emit_mov_rax_imm64(int64_t v){
-    emit1(0x48); emit1(0xB8);
-    for(int i=0;i<8;i++) emit1((v>>(i*8))&0xFF);
-}
-/* mov rdi, imm64 */
-static void emit_mov_rdi_imm64(int64_t v){
-    emit1(0x48); emit1(0xBF);
-    for(int i=0;i<8;i++) emit1((v>>(i*8))&0xFF);
-}
-/* mov rdx, imm64 */
-static void emit_mov_rdx_imm64(int64_t v){
-    emit1(0x48); emit1(0xBA);
-    for(int i=0;i<8;i++) emit1((v>>(i*8))&0xFF);
-}
-/* syscall */
-static void emit_syscall(){ emit2(0x0F,0x05); }
-/* imul rax, rax, imm32 */
-static void emit_imul_rax_imm(int32_t v){
-    emit1(0x48); emit1(0x69); emit1(0xC0); emit_i32(v);
-}
-/* cqo (64bit) */
-static void emit_cqo64(){ emit1(0x48); emit1(0x99); }
-/* idiv rcx (64bit) */
-static void emit_idiv_rcx64(){ emit1(0x48); emit1(0xF7); emit1(0xF9); }
-/* mov rcx, imm64 */
-static void emit_mov_rcx_imm64(int64_t v){
-    emit1(0x48); emit1(0xB9);
-    for(int i=0;i<8;i++) emit1((v>>(i*8))&0xFF);
-}
-/* lea rsi, [rbp+off] */
-static void emit_lea_rsi_rbp(int off){
-    emit1(0x48); emit1(0x8D);
-    if(off>=-128&&off<=127){ emit1(0x75); emit1((int8_t)off); }
-    else { emit1(0xB5); emit_i32(off); }
-}
-/* lea rdi, [rbp+off] */
-static void emit_lea_rdi_rbp(int off){
-    emit1(0x48); emit1(0x8D);
-    if(off>=-128&&off<=127){ emit1(0x7D); emit1((int8_t)off); }
-    else { emit1(0xBD); emit_i32(off); }
-}
-/* mov rax, [rbp+off] */
-static void emit_mov_rax_rbp(int off){
-    emit1(0x48); emit1(0x8B);
-    if(off>=-128&&off<=127){ emit1(0x45); emit1((int8_t)off); }
-    else { emit1(0x85); emit_i32(off); }
-}
-/* sub rax, [rbp+off] */
-static void emit_sub_rax_rbp(int off){
-    emit1(0x48); emit1(0x2B);
-    if(off>=-128&&off<=127){ emit1(0x45); emit1((int8_t)off); }
-    else { emit1(0x85); emit_i32(off); }
-}
-/* add rax, rcx */
-static void emit_add_rax_rcx64(){ emit1(0x48); emit1(0x01); emit1(0xC8); }
-/* mov [rbp+off], rax */
-static void emit_mov_rbp_rax(int off){
-    emit1(0x48); emit1(0x89);
-    if(off>=-128&&off<=127){ emit1(0x45); emit1((int8_t)off); }
-    else { emit1(0x85); emit_i32(off); }
-}
-/* mov rsi, rax */
-static void emit_mov_rsi_rax64(){ emit1(0x48); emit1(0x89); emit1(0xC6); }
-/* mov rdx, rax */
-static void emit_mov_rdx_rax64(){ emit1(0x48); emit1(0x89); emit1(0xC2); }
-/* mov rcx, rax */
-static void emit_mov_rcx_rax64(){ emit1(0x48); emit1(0x89); emit1(0xC1); }
-/* mov rax, rcx */
-static void emit_mov_rax_rcx64(){ emit1(0x48); emit1(0x89); emit1(0xC8); }
-/* movsx rax, eax */
-static void emit_movsxd_rax_eax(){ emit3(0x48,0x63,0xC0); }
-
-/* 文字列をrodataバッファに追加し、rodata内オフセットを返す */
-static int rodata_add_str(const char *s){
-    int off = rodata_size;
-    while(*s) rodata[rodata_size++] = (uint8_t)*s++;
-    rodata[rodata_size++] = 0; /* NUL終端 */
-    return off;
-}
-
-/* 文字列をコードバッファに埋め込み、code内オフセットを返す（ランタイム埋め込み用） */
-static int embed_str(const char *s){
-    int off=code_size;
-    while(*s) emit1((uint8_t)*s++);
-    return off;
-}
-
-/* _start: syscall版ランタイム
-   スタックレイアウト(rbp基準):
-   [rbp-16]  = start.tv_sec
-   [rbp-8]   = start.tv_nsec
-   [rbp-32]  = end.tv_sec
-   [rbp-24]  = end.tv_nsec
-   [rbp-40]  = result (long)
-   [rbp-48]  = ms (long)
-   [rbp-176] = output buffer (128 bytes)
-*/
-/* NASMで生成したランタイムバイト列を直接埋め込む
-   __itoa64: offset=0x00, _start: offset=0x6e
-   sim_main call patch: offset=0x8f (R_X86_64_PC32) */
+/* ===== ランタイムバイト列 ===== */
 static const uint8_t runtime_bytes[] = {
     0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x40,0x48,0x89,0x7d,0xf8,0x48,0x89,0x75,0xf0,
     0x48,0x85,0xff,0x79,0x0d,0xc6,0x06,0x2d,0x48,0xff,0xc6,0x48,0x89,0x75,0xf0,0x48,
@@ -988,7 +889,7 @@ static const uint8_t runtime_bytes[] = {
     /* _start at 0x6e */
     0x55,0x48,0x89,0xe5,0x48,0x81,0xec,0x00,0x01,0x00,0x00,0x53,0x41,0x54,0x41,0x55,
     0xb8,0xe4,0x00,0x00,0x00,0xbf,0x01,0x00,0x00,0x00,0x48,0x8d,0x75,0xd0,0x0f,0x05,
-    0xe8,0x00,0x00,0x00,0x00,  /* call sim_main: offset=0x8f, patch here (+0x21 from _start) */
+    0xe8,0x00,0x00,0x00,0x00,
     0x48,0x63,0xc0,0x49,0x89,0xc4,0xb8,0xe4,0x00,0x00,0x00,0xbf,0x01,0x00,0x00,0x00,
     0x48,0x8d,0x75,0xe0,0x0f,0x05,0x48,0x8b,0x45,0xe0,0x48,0x2b,0x45,0xd0,0x48,0x69,
     0xc0,0xe8,0x03,0x00,0x00,0x48,0x89,0xc3,0x48,0x8b,0x45,0xe8,0x48,0x2b,0x45,0xd8,
@@ -1012,201 +913,397 @@ static const uint8_t runtime_bytes[] = {
     0xb0,0x0a,0x88,0x04,0x0e,0xff,0xc1,0xb8,0x01,0x00,0x00,0x00,0xbf,0x01,0x00,0x00,
     0x00,0x48,0x89,0xca,0x0f,0x05,0xb8,0x3c,0x00,0x00,0x00,0x48,0x31,0xff,0x0f,0x05
 };
-#define RUNTIME_ITOA64_OFF  0x00
-#define RUNTIME_START_OFF   0x6e
+#define RUNTIME_ITOA64_OFF      0x00
+#define RUNTIME_START_OFF       0x6e
 #define RUNTIME_SIMMAIN_CALL_OFF 0x8f
 
-static void emit_itoa64(){
-    sym_define("__itoa64", code_size, 0);
-    for(int i=0; i<RUNTIME_START_OFF; i++) emit1(runtime_bytes[i]);
+static void emit_itoa64(CaiContext *c){
+    sym_define(c,"__itoa64",c->code_size,0);
+    for(int i=0;i<RUNTIME_START_OFF;i++) emit1(c,runtime_bytes[i]);
+}
+static void emit_runtime(CaiContext *c){
+    sym_define(c,"_start",c->code_size,1);
+    int start_code_off=c->code_size;
+    int runtime_size=(int)sizeof(runtime_bytes);
+    for(int i=RUNTIME_START_OFF;i<runtime_size;i++) emit1(c,runtime_bytes[i]);
+    int call_off=start_code_off+(RUNTIME_SIMMAIN_CALL_OFF-RUNTIME_START_OFF);
+    c->patches[c->patch_count].code_off=call_off;
+    strncpy(c->patches[c->patch_count].sym,"sim_main",MAX_NAME-1);
+    c->patch_count++;
 }
 
-static void emit_runtime(){
-    sym_define("_start", code_size, 1);
-    int start_code_off = code_size;
-    int runtime_size = (int)sizeof(runtime_bytes);
-    for(int i=RUNTIME_START_OFF; i<runtime_size; i++) emit1(runtime_bytes[i]);
-    int call_off = start_code_off + (RUNTIME_SIMMAIN_CALL_OFF - RUNTIME_START_OFF);
-    patches[patch_count].code_off = call_off;
-    strncpy(patches[patch_count].sym, "sim_main", MAX_NAME-1);
-    patch_count++;
+static int rodata_add_str(CaiContext *c, const char *s){
+    int off=c->rodata_size;
+    while(*s) c->rodata[c->rodata_size++]=(uint8_t)*s++;
+    c->rodata[c->rodata_size++]=0;
+    return off;
 }
 
-/* ===== ELF実行ファイル直接生成（.text + .rodata セクション分離） ===== */
-#define LOAD_BASE  0x400000ULL
-#define PAGE       0x1000ULL
+/* ===== ELF構造体定義 ===== */
+#define PAGE      0x1000ULL
+
+/* PT_* 定数 */
+#define PT_NULL     0
+#define PT_LOAD     1
+#define PT_DYNAMIC  2
+#define PT_PHDR     6
+#define PT_GNU_STACK 0x6474e551
+
+/* DT_* 定数（.dynamic セクション用） */
+#define DT_NULL  0
+#define DT_DEBUG 21  /* デバッガ用（静的PIEの最小.dynamic） */
 
 typedef struct {
-    uint8_t  e_ident[16]; uint16_t e_type,e_machine; uint32_t e_version;
-    uint64_t e_entry,e_phoff,e_shoff; uint32_t e_flags;
-    uint16_t e_ehsize,e_phentsize,e_phnum,e_shentsize,e_shnum,e_shstrndx;
+    uint8_t  e_ident[16];
+    uint16_t e_type, e_machine;
+    uint32_t e_version;
+    uint64_t e_entry, e_phoff, e_shoff;
+    uint32_t e_flags;
+    uint16_t e_ehsize, e_phentsize, e_phnum;
+    uint16_t e_shentsize, e_shnum, e_shstrndx;
 } ExeEhdr;
+
 typedef struct {
-    uint32_t p_type,p_flags;
-    uint64_t p_offset,p_vaddr,p_paddr,p_filesz,p_memsz,p_align;
+    uint32_t p_type, p_flags;
+    uint64_t p_offset, p_vaddr, p_paddr, p_filesz, p_memsz, p_align;
 } ExePhdr;
 
-static void write_exe(const char *path){
-    /*
-     * ファイルレイアウト:
-     *   0x0000 : ELFヘッダ (64B)
-     *   0x0040 : PHDRx2   (2 * 56B = 112B)
-     *   0x1000 : .text    (code_size bytes, RX)
-     *   pageアライン後
-     *   0xN000 : .rodata  (rodata_size bytes, R)  ← 新規追加
+typedef struct {
+    uint32_t sh_name, sh_type, sh_flags;
+    uint64_t sh_addr, sh_off, sh_size;
+    uint32_t sh_link, sh_info;
+    uint64_t sh_align, sh_entsize;
+} ExeShdr;
+
+typedef struct {
+    int64_t d_tag;
+    uint64_t d_val;
+} Elf64Dyn;
+
+/*
+ * write_exe: 完全な静的PIE ELFバイナリを生成する
+ *
+ * ファイルレイアウト:
+ *   0x0000 : ELFヘッダ (64B)
+ *   0x0040 : Program Headers (PHDR数 × 56B)
+ *   0x1000 : .text (RX)
+ *   page境界: .rodata (R) ← rodataがある場合
+ *   page境界: .dynamic (RW) ← PT_DYNAMIC正規化用
+ *   末尾    : .shstrtab + セクションヘッダ
+ *
+ * セグメント構成:
+ *   PT_PHDR      : プログラムヘッダ自体の位置
+ *   PT_LOAD(RX)  : ELFヘッダ + PHDRs + .text
+ *   PT_LOAD(R)   : .rodata（ある場合）
+ *   PT_LOAD(RW)  : .dynamic
+ *   PT_DYNAMIC   : .dynamicセクションを指す（ET_DYN正規化）
+ *   PT_GNU_STACK : NX有効（スタック実行禁止）
+ */
+static void write_exe(CaiContext *c, const char *path){
+
+    /* ===== .dynamic セクション構築 =====
+     * 静的PIEの最小構成: DT_DEBUG + DT_NULL
+     * DT_DEBUG: gdb/lldb がデバッグ情報を見つけるために使う
      */
+    Elf64Dyn dyn_entries[2];
+    dyn_entries[0].d_tag = DT_DEBUG; dyn_entries[0].d_val = 0;
+    dyn_entries[1].d_tag = DT_NULL;  dyn_entries[1].d_val = 0;
+    uint64_t dynamic_size = sizeof(dyn_entries);
 
-    /* .textセクションのVMA */
-    uint64_t text_file_off = 0x1000;
-    uint64_t text_vma      = LOAD_BASE + text_file_off;
+    /* ===== .shstrtab 構築 ===== */
+    /* セクション名文字列テーブル */
+    const char shstrtab_data[] =
+        "\0"          /* index 0: null */
+        ".text\0"     /* index 1 */
+        ".rodata\0"   /* index 7 */
+        ".dynamic\0"  /* index 15 */
+        ".shstrtab\0" /* index 24 */
+        ;
+    uint64_t shstrtab_size = sizeof(shstrtab_data);
+    /* 各セクション名のインデックス */
+    int sh_name_text     = 1;
+    int sh_name_rodata   = 7;
+    int sh_name_dynamic  = 15;
+    int sh_name_shstrtab = 24;
 
-    /* .rodataセクションのファイルオフセット（pageアライン） */
-    uint64_t rodata_file_off = (text_file_off + (uint64_t)code_size + PAGE - 1) & ~(PAGE - 1);
-    uint64_t rodata_vma      = LOAD_BASE + rodata_file_off;
+    /* ===== ファイルレイアウト計算 ===== */
 
-    /* シンボルのVMAを設定 */
-    for(int i=0;i<sym_count;i++){
-        if(!syms[i].defined) continue;
-        if(syms[i].off & (1<<30)){
-            /* rodataシンボル: bit30を外してrodata_vmaを加算 */
-            syms[i].off = (int)((syms[i].off & ~(1<<30)) + rodata_vma);
+    /* PHDRの数を先に決める:
+     * PT_PHDR, PT_LOAD(RX), PT_LOAD(R)[条件付き],
+     * PT_LOAD(RW/.dynamic), PT_DYNAMIC, PT_GNU_STACK */
+    int has_rodata = (c->rodata_size > 0);
+    int phdr_count = 5 + (has_rodata ? 1 : 0);
+
+    uint64_t ehdr_size   = sizeof(ExeEhdr);
+    uint64_t phdr_size   = (uint64_t)phdr_count * sizeof(ExePhdr);
+    uint64_t headers_end = ehdr_size + phdr_size;
+
+    /* .text: pageアラインされた位置から */
+    uint64_t text_off    = align_up(headers_end, PAGE);
+    uint64_t text_vma    = text_off;  /* PIE: ベース0x0なのでvma=offset */
+    uint64_t text_size   = (uint64_t)c->code_size;
+
+    /* .rodata */
+    uint64_t rodata_off  = align_up(text_off + text_size, PAGE);
+    uint64_t rodata_vma  = rodata_off;
+    uint64_t rodata_size = (uint64_t)c->rodata_size;
+
+    /* .dynamic: rodataの後ろ（rodataなしならtextの後ろ） */
+    uint64_t dynamic_off = has_rodata
+                         ? align_up(rodata_off + rodata_size, PAGE)
+                         : align_up(text_off + text_size, PAGE);
+    uint64_t dynamic_vma = dynamic_off;
+
+    /* .shstrtab + セクションヘッダ */
+    uint64_t shstrtab_off = align_up(dynamic_off + dynamic_size, 8);
+    uint64_t shoff         = align_up(shstrtab_off + shstrtab_size, 8);
+
+    /* セクション数: null + .text + .rodata(条件) + .dynamic + .shstrtab */
+    int shnum = 4 + (has_rodata ? 1 : 0);
+
+    uint64_t file_size = shoff + (uint64_t)shnum * sizeof(ExeShdr);
+
+    /* ===== バッファ確保 ===== */
+    uint8_t *buf = (uint8_t*)calloc(1, file_size);
+    if(!buf){ perror("calloc"); exit(1); }
+
+    /* ===== シンボルVMA確定 ===== */
+    for(int i=0;i<c->sym_count;i++){
+        if(!c->syms[i].defined) continue;
+        if(c->syms[i].off & (1<<30)){
+            c->syms[i].off = (int)((c->syms[i].off & ~(1<<30)) + rodata_vma);
         } else {
-            /* textシンボル */
-            syms[i].off += (int)text_vma;
+            c->syms[i].off += (int)text_vma;
         }
     }
 
-    /* patches を適用 */
+    /* ===== パッチ適用 ===== */
     int unresolved = 0;
-    for(int i=0;i<patch_count;i++){
-        int si=sym_find2(patches[i].sym);
-        if(si<0||!syms[si].defined){
-            fprintf(stderr,"Link Error: Undefined symbol: %s\n",patches[i].sym);
+    for(int i=0;i<c->patch_count;i++){
+        int si = sym_find2(c, c->patches[i].sym);
+        if(si<0 || !c->syms[si].defined){
+            fprintf(stderr,"Link Error: Undefined symbol: %s\n", c->patches[i].sym);
             unresolved++;
             continue;
         }
-        uint64_t patch_vma = text_vma + patches[i].code_off;
-        int32_t rel = (int32_t)(syms[si].off - (patch_vma + 4));
-        patch_i32(patches[i].code_off, rel);
+        uint64_t patch_vma = text_vma + (uint64_t)c->patches[i].code_off;
+        int32_t rel = (int32_t)((uint64_t)c->syms[si].off - (patch_vma + 4));
+        patch_i32(c, c->patches[i].code_off, rel);
     }
-
     if(unresolved > 0){
         fprintf(stderr,"Link failed: %d unresolved symbol(s).\n", unresolved);
-        return;
+        free(buf);
+        exit(1);
     }
 
-    /* _startのVMA = entrypoint */
-    int start_si=sym_find2("_start");
-    uint64_t entry = start_si>=0 ? (uint64_t)syms[start_si].off : text_vma;
+    /* ===== エントリポイント ===== */
+    int start_si = sym_find2(c, "_start");
+    uint64_t entry = start_si >= 0 ? (uint64_t)c->syms[start_si].off : text_vma;
 
-    /* ファイルサイズ計算 */
-    uint64_t file_size = rodata_file_off + (uint64_t)(rodata_size > 0 ? rodata_size : 0);
+    /* ===== ELFヘッダ ===== */
+    ExeEhdr *eh = (ExeEhdr*)buf;
+    memcpy(eh->e_ident, "\x7f" "ELF", 4);
+    eh->e_ident[4] = 2;  /* ELFCLASS64 */
+    eh->e_ident[5] = 1;  /* ELFDATA2LSB */
+    eh->e_ident[6] = 1;  /* EV_CURRENT */
+    eh->e_type     = 3;  /* ET_DYN: 静的PIE */
+    eh->e_machine  = 62; /* EM_X86_64 */
+    eh->e_version  = 1;
+    eh->e_entry    = entry;
+    eh->e_phoff    = ehdr_size;
+    eh->e_ehsize   = (uint16_t)ehdr_size;
+    eh->e_phentsize= sizeof(ExePhdr);
+    eh->e_phnum    = (uint16_t)phdr_count;
+    eh->e_shentsize= sizeof(ExeShdr);
+    eh->e_shnum    = (uint16_t)shnum;
+    eh->e_shstrndx = (uint16_t)(shnum - 1); /* .shstrtabは最後 */
+    eh->e_shoff    = shoff;
 
-    uint8_t *buf=(uint8_t*)calloc(1,file_size);
-    if(!buf){perror("calloc");return;}
+    /* ===== Program Headers ===== */
+    ExePhdr *ph = (ExePhdr*)(buf + ehdr_size);
+    int pi = 0;
 
-    /* ELFヘッダ */
-    ExeEhdr *eh=(ExeEhdr*)buf;
-    memcpy(eh->e_ident,"\x7f" "ELF",4);
-    eh->e_ident[4]=2; eh->e_ident[5]=1; eh->e_ident[6]=1;
-    eh->e_type=2;   /* ET_EXEC */
-    eh->e_machine=62; /* EM_X86_64 */
-    eh->e_version=1;
-    eh->e_entry=entry;
-    eh->e_phoff=sizeof(ExeEhdr);
-    eh->e_ehsize=sizeof(ExeEhdr);
-    eh->e_phentsize=sizeof(ExePhdr);
-    eh->e_phnum=(rodata_size > 0) ? 2 : 1; /* rodataがあれば2セグメント */
+    /* PT_PHDR: プログラムヘッダテーブル自体を指す */
+    ph[pi].p_type   = PT_PHDR;
+    ph[pi].p_flags  = PF_R;
+    ph[pi].p_offset = ehdr_size;
+    ph[pi].p_vaddr  = ehdr_size;
+    ph[pi].p_paddr  = ehdr_size;
+    ph[pi].p_filesz = phdr_size;
+    ph[pi].p_memsz  = phdr_size;
+    ph[pi].p_align  = 8;
+    pi++;
 
-    /* PT_LOAD #1: .text (RX) */
-    ExePhdr *ph=(ExePhdr*)(buf+sizeof(ExeEhdr));
-    ph->p_type=1;   /* PT_LOAD */
-    ph->p_flags=5;  /* PF_R|PF_X */
-    ph->p_offset=0;
-    ph->p_vaddr=LOAD_BASE;
-    ph->p_paddr=LOAD_BASE;
-    ph->p_filesz=text_file_off + (uint64_t)code_size;
-    ph->p_memsz =text_file_off + (uint64_t)code_size;
-    ph->p_align=PAGE;
+    /* PT_LOAD #0: ELFヘッダ + PHDRs + .text (R+X) */
+    ph[pi].p_type   = PT_LOAD;
+    ph[pi].p_flags  = PF_R | PF_X;
+    ph[pi].p_offset = 0;
+    ph[pi].p_vaddr  = 0;
+    ph[pi].p_paddr  = 0;
+    ph[pi].p_filesz = text_off + text_size;
+    ph[pi].p_memsz  = text_off + text_size;
+    ph[pi].p_align  = PAGE;
+    pi++;
 
-    /* PT_LOAD #2: .rodata (R) — rodataがある場合のみ有効 */
-    if(rodata_size > 0){
-        ExePhdr *ph2 = ph + 1;
-        ph2->p_type=1;  /* PT_LOAD */
-        ph2->p_flags=4; /* PF_R */
-        ph2->p_offset=rodata_file_off;
-        ph2->p_vaddr=rodata_vma;
-        ph2->p_paddr=rodata_vma;
-        ph2->p_filesz=(uint64_t)rodata_size;
-        ph2->p_memsz =(uint64_t)rodata_size;
-        ph2->p_align=PAGE;
+    /* PT_LOAD #1: .rodata (R) — ある場合のみ */
+    if(has_rodata){
+        ph[pi].p_type   = PT_LOAD;
+        ph[pi].p_flags  = PF_R;
+        ph[pi].p_offset = rodata_off;
+        ph[pi].p_vaddr  = rodata_vma;
+        ph[pi].p_paddr  = rodata_vma;
+        ph[pi].p_filesz = rodata_size;
+        ph[pi].p_memsz  = rodata_size;
+        ph[pi].p_align  = PAGE;
+        pi++;
     }
 
-    /* セクションデータをバッファに書き込み */
-    memcpy(buf + text_file_off, code, code_size);
-    if(rodata_size > 0)
-        memcpy(buf + rodata_file_off, rodata, rodata_size);
+    /* PT_LOAD #2: .dynamic (R+W) */
+    ph[pi].p_type   = PT_LOAD;
+    ph[pi].p_flags  = PF_R | PF_W;
+    ph[pi].p_offset = dynamic_off;
+    ph[pi].p_vaddr  = dynamic_vma;
+    ph[pi].p_paddr  = dynamic_vma;
+    ph[pi].p_filesz = dynamic_size;
+    ph[pi].p_memsz  = dynamic_size;
+    ph[pi].p_align  = PAGE;
+    pi++;
 
-    FILE *f=fopen(path,"wb");
-    if(!f){perror("fopen exe");free(buf);return;}
-    fwrite(buf,1,file_size,f);
+    /* PT_DYNAMIC: .dynamicセクションを指す（ET_DYN正規化） */
+    ph[pi].p_type   = PT_DYNAMIC;
+    ph[pi].p_flags  = PF_R | PF_W;
+    ph[pi].p_offset = dynamic_off;
+    ph[pi].p_vaddr  = dynamic_vma;
+    ph[pi].p_paddr  = dynamic_vma;
+    ph[pi].p_filesz = dynamic_size;
+    ph[pi].p_memsz  = dynamic_size;
+    ph[pi].p_align  = 8;
+    pi++;
+
+    /* PT_GNU_STACK: NX有効（スタック実行禁止）
+     * p_flags に PF_X を含めない = スタック実行禁止
+     * filesz/memsz = 0 でよい（スタックサイズはOSが決める） */
+    ph[pi].p_type   = PT_GNU_STACK;
+    ph[pi].p_flags  = PF_R | PF_W;  /* 実行(PF_X)なし = NX有効 */
+    ph[pi].p_offset = 0;
+    ph[pi].p_vaddr  = 0;
+    ph[pi].p_paddr  = 0;
+    ph[pi].p_filesz = 0;
+    ph[pi].p_memsz  = 0;
+    ph[pi].p_align  = 16;
+    pi++;
+
+    /* ===== セクションデータをバッファへ ===== */
+    memcpy(buf + text_off, c->code, (size_t)text_size);
+    if(has_rodata)
+        memcpy(buf + rodata_off, c->rodata, (size_t)rodata_size);
+    memcpy(buf + dynamic_off, dyn_entries, (size_t)dynamic_size);
+    memcpy(buf + shstrtab_off, shstrtab_data, (size_t)shstrtab_size);
+
+    /* ===== セクションヘッダ ===== */
+    ExeShdr *sh = (ExeShdr*)(buf + shoff);
+    int si2 = 0;
+
+    /* SHT_NULL */
+    memset(&sh[si2], 0, sizeof(ExeShdr));
+    si2++;
+
+    /* .text: SHT_PROGBITS, SHF_ALLOC|SHF_EXECINSTR */
+    sh[si2].sh_name    = (uint32_t)sh_name_text;
+    sh[si2].sh_type    = 1;   /* SHT_PROGBITS */
+    sh[si2].sh_flags   = 6;   /* SHF_ALLOC | SHF_EXECINSTR */
+    sh[si2].sh_addr    = text_vma;
+    sh[si2].sh_off     = text_off;
+    sh[si2].sh_size    = text_size;
+    sh[si2].sh_align   = 16;
+    si2++;
+
+    /* .rodata: SHT_PROGBITS, SHF_ALLOC（ある場合） */
+    if(has_rodata){
+        sh[si2].sh_name  = (uint32_t)sh_name_rodata;
+        sh[si2].sh_type  = 1;  /* SHT_PROGBITS */
+        sh[si2].sh_flags = 2;  /* SHF_ALLOC */
+        sh[si2].sh_addr  = rodata_vma;
+        sh[si2].sh_off   = rodata_off;
+        sh[si2].sh_size  = rodata_size;
+        sh[si2].sh_align = 8;
+        si2++;
+    }
+
+    /* .dynamic: SHT_DYNAMIC, SHF_ALLOC|SHF_WRITE */
+    sh[si2].sh_name    = (uint32_t)sh_name_dynamic;
+    sh[si2].sh_type    = 6;   /* SHT_DYNAMIC */
+    sh[si2].sh_flags   = 3;   /* SHF_ALLOC | SHF_WRITE */
+    sh[si2].sh_addr    = dynamic_vma;
+    sh[si2].sh_off     = dynamic_off;
+    sh[si2].sh_size    = dynamic_size;
+    sh[si2].sh_align   = 8;
+    sh[si2].sh_entsize = sizeof(Elf64Dyn);
+    si2++;
+
+    /* .shstrtab: SHT_STRTAB */
+    sh[si2].sh_name  = (uint32_t)sh_name_shstrtab;
+    sh[si2].sh_type  = 3;  /* SHT_STRTAB */
+    sh[si2].sh_off   = shstrtab_off;
+    sh[si2].sh_size  = shstrtab_size;
+    sh[si2].sh_align = 1;
+    si2++;
+
+    /* ===== 書き出し ===== */
+    FILE *f = fopen(path, "wb");
+    if(!f){ perror("fopen exe"); free(buf); exit(1); }
+    fwrite(buf, 1, file_size, f);
     fclose(f);
     free(buf);
 
-    /* chmod +x: fchmod syscallで実行権限付与（shell不要） */
+    /* chmod +x */
     {
         int fd = open(path, O_RDONLY);
-        if(fd >= 0){
-            fchmod(fd, 0755);
-            close(fd);
-        }
+        if(fd >= 0){ fchmod(fd, 0755); close(fd); }
     }
 }
 
 /* ===== メイン ===== */
-int main(int argc,char *argv[]){
+int main(int argc, char *argv[]){
     if(argc<3){ fprintf(stderr,"Usage: cai_conv <input.cai> <output>\n"); return 1; }
-    parse_file(argv[1]);
+
+    CaiContext *c=ctx_new();
+
+    parse_file(c,argv[1]);
 
     /* 関数収集 */
     int cur=-1;
-    for(int i=0;i<instr_count;i++){
-        if(instrs[i].kind==OP_FUNC){
-            cur=func_count++;
-            strncpy(funcs[cur].name,instrs[i].dst,MAX_NAME-1);
-            funcs[cur].is_export=instrs[i].is_export;
-            funcs[cur].instr_start=i+1;
-        } else if(instrs[i].kind==OP_ENDFUNC&&cur>=0){
-            funcs[cur].instr_end=i; cur=-1;
+    for(int i=0;i<c->instr_count;i++){
+        if(c->instrs[i].kind==OP_FUNC){
+            cur=c->func_count++;
+            strncpy(c->funcs[cur].name,c->instrs[i].dst,MAX_NAME-1);
+            c->funcs[cur].is_export=c->instrs[i].is_export;
+            c->funcs[cur].instr_start=i+1;
+        } else if(c->instrs[i].kind==OP_ENDFUNC&&cur>=0){
+            c->funcs[cur].instr_end=i; cur=-1;
         }
     }
 
     /* コード生成 */
-    for(int i=0;i<func_count;i++) gen_func(&funcs[i]);
+    for(int i=0;i<c->func_count;i++) gen_func(c,&c->funcs[i]);
 
-    /* itoa64とruntimeを生成 */
-    emit_itoa64();
-    emit_runtime();
+    emit_itoa64(c);
+    emit_runtime(c);
 
-    /* data命令を処理: .rodataに文字列定数を配置しシンボル登録
-       生成されたVMAは文字列定数を参照するCAI命令から使用可能 */
-    /* 注意: rodataのVMAはwrite_exe内で確定するため、ここではオフセットのみ記録
-       実際のVMA = rodata_vma_base + rodata_offset（write_exe内で計算）
-       現時点ではrodata内オフセットをシンボルとして仮登録し、write_exe側でVMAを補正する */
-    for(int i=0;i<instr_count;i++){
-        if(instrs[i].kind==OP_DATA){
-            const char *label=instrs[i].dst;
+    /* data命令処理: .rodataへ文字列定数を配置 */
+    for(int i=0;i<c->instr_count;i++){
+        if(c->instrs[i].kind==OP_DATA){
+            const char *label=c->instrs[i].dst;
             if(label[0]=='$') label++;
-            int off=rodata_add_str(instrs[i].str_val);
-            /* オフセットをシンボルとして登録（is_rodata=global, defined=1）
-               VMAはwrite_exe内で補正される */
-            sym_define(label, off | (1<<30), 1); /* bit30=rodataフラグ */
+            int off=rodata_add_str(c,c->instrs[i].str_val);
+            sym_define(c,label,off|(1<<30),1);
         }
     }
 
-    /* ELF実行ファイル直接出力（GCC不要） */
-    write_exe(argv[2]);
+    write_exe(c,argv[2]);
 
     printf("Binary → %s ✅\n",argv[2]);
+
+    free(c);
     return 0;
 }
