@@ -8,25 +8,30 @@ C/C++を玉座から引きずり降ろすために設計されたシステムプ
 
 ---
 
-## 概要
+## Why Similarity?
 
-SimilarityはC/C++依存ゼロを目指したオリジナルのシステムプログラミング言語です。GCなし、コンパイラは推測しない、unsafe操作は明示必須、速度は妥協しない、という哲学のもとに設計されています。
+C/C++はシステムプログラミングの標準だが、問題が多い。unsafeな操作が暗黙的に許可され、コンパイラは推測で動き、ツールチェーンはGCCやLLVMに依存し続ける。
+
+Similarityはその全てを拒否する。
+
+- **GCなし** — メモリ管理を言語が隠さない
+- **推測しない** — 全ての操作を明示する
+- **unsafe操作は`Mem[risk{}]`で明示** — Echoが自動でレポートを生成する
+- **Async間の共有変数は`share()`で明示** — データ競合をコンパイル時に検出
+- **C/C++依存ゼロ** — CAI変換器がas・ldを完全排除。GCC不要
 
 ---
 
 ## コンパイラパイプライン
 
 ```
-.iia → lexer → parser → AST → typecheck → echo → codegen → QBE IR → バイナリ
+.iia → lexer → parser → AST → typecheck → echo → caigen → CAI IR → cai_conv → バイナリ
 .sml → transpiler → .iia → 上記パイプライン
-
---caiフラグ使用時:
-.iia → lexer → parser → AST → typecheck → caigen → CAI IR → cai_conv → バイナリ
 ```
 
-**CAI（Common Assembly Instructions / 共通アセンブリ命令）** はSimilarity独自のIRです。
-`cai_conv`はx86_64機械語を直接生成し、GCCのアセンブラ（as）もリンカ（ld）も使いません。
-ELF実行ファイルをsyscallベースで直接出力します。GCC不要。
+**CAI（Common Assembly Instructions）** はSimilarity独自のIRです。
+`cai_conv`はx86_64機械語を直接生成し、as（アセンブラ）もld（リンカ）も使いません。
+静的PIE（ET_DYN）のELFバイナリをsyscallベースで直接出力します。GCC不要。
 
 ---
 
@@ -36,7 +41,7 @@ ELF実行ファイルをsyscallベースで直接出力します。GCC不要。
 |---|---|
 | `.iia` | 低レイヤー構文（本来の形式） |
 | `.sml` | シュガーシンタックス（`.iia`にトランスパイルして使用） |
-| `.cai` | CAI IR（テキスト形式、Phase1） |
+| `.cai` | CAI IR（テキスト形式） |
 
 ---
 
@@ -60,6 +65,7 @@ Mutation[variable{int(x:30)}]
 Var[let{int(x:10)}]
 Func[name{...}]
 Func_pub[name{...}]
+App[name{args}]
 ```
 
 ### 制御フロー
@@ -121,7 +127,6 @@ Fatal[type{OutOfMemory}, msg{"回復不能"}]
 ### モジュール
 ```iia
 Import[math{}]
-Import[discord{}]
 Extern[C{lib{"SDL2"}, draw{receive{int(x)}, return{}}}]
 ```
 
@@ -164,19 +169,20 @@ name: MyProject
 version: 0.1.0
 dependencies:
   - math
-  - discord
 ```
 
 ---
 
 ## ベンチマーク結果（100回平均・コールドスタート）
 
-### 実行速度
+### 実行速度（CAIバックエンド vs C++ -O0）
 
-| 比較項目 | Similarity | C++ (-O0) |
+| 比較項目 | Similarity (CAI) | C++ (-O0) |
 |---|---|---|
-| fibonacci(40) | 713ms | 453ms |
-| 総和（0〜1億） | 23ms | 67ms（**2.8倍速い**） |
+| fibonacci(40) | ~745ms | ~452ms |
+| 総和（0〜1億） | ~92ms | ~66ms |
+
+※ CAIバックエンドは最適化継続中。
 
 ### フロントエンド速度（コンパイル時間）
 
@@ -195,9 +201,7 @@ go build -o sim ./cmd/
 gcc -O2 -o cai_conv cai_converter/cai_converter.c
 
 # 実行
-./sim your_file.iia             # QBEバックエンド
 ./sim --cai your_file.iia       # CAIバックエンド（GCC不要）
-./sim --ir-only your_file.iia   # QBE IRのみ生成
 ./sim your_file.sml             # シュガーシンタックス
 ```
 
@@ -208,7 +212,15 @@ gcc -O2 -o cai_conv cai_converter/cai_converter.c
 | 機能 | 状態 |
 |---|---|
 | lexer/parser | ✅ |
-| codegen（QBE） | ✅ |
+| CAI IR（caigen） | ✅ |
+| CAI変換器（x86_64直接生成） | ✅ |
+| asの代替（機械語直接生成） | ✅ |
+| ldの代替（ELF直接生成） | ✅ |
+| 静的PIE（ET_DYN + ASLR） | ✅ |
+| NX（スタック実行禁止） | ✅ |
+| セクション分離（.text / .rodata / .dynamic） | ✅ |
+| セクションヘッダ（readelf/objdump/gdb対応） | ✅ |
+| CAI data命令（文字列定数→.rodata） | ✅ |
 | ポインタ（addr/deref） | ✅ |
 | 配列アクセス（index） | ✅ |
 | cast（int↔float） | ✅ |
@@ -219,16 +231,9 @@ gcc -O2 -o cai_conv cai_converter/cai_converter.c
 | typecheck（行番号・列番号付きエラー） | ✅ |
 | Echo（project.eho） | ✅ |
 | Cell（project.cel） | ✅ |
-| return()構文 | ✅ |
 | シュガーシンタックス（.sml） | ✅ |
 | stdlib/math | ✅ |
-| CAI IR | ✅ |
-| CAI変換器（x86_64直接生成） | ✅ |
-| asの代替（機械語直接生成） | ✅ |
-| ldの代替（ELF直接生成） | ✅ |
-| セクション分離（.text / .rodata） | ✅ |
-| CAI data命令（文字列定数→.rodata） | ✅ |
-| 標準ライブラリ拡張 | 🔶 未着手 |
+| 標準ライブラリ拡張（io等） | 🔶 未着手 |
 | 各言語互換性レイヤー | 🔶 未着手 |
 | GPU本実装 | 🔶 CAI安定後 |
 | APE形式（マルチOS） | 🔶 未着手 |
@@ -248,28 +253,19 @@ gcc -O2 -o cai_conv cai_converter/cai_converter.c
 
 ## 開発進捗
 
-### 現在のフォーカス
-CAIバックエンドの安定化・最適化
-
-### Phase 1: フロントエンド完成（✅ 完了）
-- lexer / parser / AST
-- typecheck（null安全・型整合性・オーバーフロー検出・データ競合防止・行番号付きエラー出力）
-- Echo（project.eho）/ Cell（project.cel）
-- QBEバックエンド
-- シュガーシンタックス（.sml）
-- stdlib/math
+### Phase 1: フロントエンド（✅ 完了）
+lexer / parser / AST / typecheck / Echo / Cell / シュガーシンタックス / stdlib/math
 
 ### Phase 2: CAIバックエンド（🔶 進行中）
 - CAI IR設計・実装 ✅
-- caigen（Go→CAI IR生成）✅
+- caigen（AST→CAI IR生成）✅
 - cai_conv（CAI→x86_64機械語直接生成）✅
-- asの代替（GCCのアセンブラを排除）✅
-- ldの代替（ELF直接生成）✅
-- セクション分離（.text / .rodata）✅
-- APE形式（Cosmopolitan、マルチOS対応）📅
+- asの代替 ✅ / ldの代替 ✅
+- 静的PIE・NX・セクション分離 ✅
+- 標準ライブラリ拡張（io等）🔶
+- APE形式（Cosmopolitan、マルチOS）🔶
 
 ### Phase 3: エコシステム（📅 未着手）
-- 標準ライブラリ拡張（io等）
 - 各言語互換性レイヤー（Python/Rust/Java/C#/Odin/JS/Go/Zig）
 - GPU本実装
 - 自己ホスト
