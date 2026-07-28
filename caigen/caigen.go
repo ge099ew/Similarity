@@ -61,6 +61,11 @@ const (
 	CAILoadP   = "loadp"
 	CAIMov     = "mov"
 	CAISyscall = "syscall"
+	CAILoadB  = "loadb"
+	CAIStoreB = "storeb"
+	CAIStoreP = "storep"
+	CAILoadP2 = "loadp2"
+	CAIAddP   = "addp"
 )
 
 // ===== 型サイズ管理 =====

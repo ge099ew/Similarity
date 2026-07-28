@@ -57,6 +57,11 @@ typedef enum {
     OP_EXTERN, OP_FUNC, OP_ENDFUNC,
     OP_DATA,
     OP_SYSCALL, /* syscall %dst <nr> <arg0> <arg1> <arg2> */
+    OP_LOADB,   /* loadb  %dst %ptr      — 1バイトをゼロ拡張でロード */
+    OP_STOREB,  /* storeb %ptr %val      — 1バイトをストア（val の下位8bit） */
+    OP_ADDP,    /* addp   %dst %ptr %off — ポインタ(64bit)にオフセット(32bit)を加算 */
+    OP_STOREP,  /* storep %ptr %val      — 8バイト(64bit)をストア */
+    OP_LOADP2,  /* loadp2 %dst %ptr      — 8バイト(64bit)をロード（loadpはCAI既存名と競合回避） */
     OP_COMMENT,
 } OpKind;
 
@@ -289,6 +294,46 @@ static void store_eax_to(CaiContext *c, const char *dst){
 
 /* 前方宣言 */
 static void sym_ref(CaiContext *c, const char *name);
+static void load_sym_addr_to_rax(CaiContext *c, const char *sym);
+
+/* load_ptr_to_rax: ポインタ変数（64bit）をraxにロードする
+ * 通常のload_to_eax（32bit）と異なり、64bitアドレスを保持する変数に使う。
+ * $シンボル: lea rax,[rip+rel32]
+ * %vreg(phys_reg): mov rax, r64（64bit MOV）
+ * %vreg(stack):    mov rax, [rbp+off]（64bit MOV）
+ * 即値:            mov rax, imm（movsx rax,imm32）
+ */
+static void load_ptr_to_rax(CaiContext *c, const char *val){
+    if(val[0]=='$'){
+        load_sym_addr_to_rax(c,val);
+    } else if(val[0]=='%'){
+        int i=find_vreg(c,val);
+        if(i>=0){
+            if(c->vregs[i].phys_reg>=0){
+                int pr=phys_to_reg(c->vregs[i].phys_reg);
+                /* mov rax, r64: REX.W + REX.B(if src>=8) + 89 + ModRM(src->rax)
+                 * または REX.W + 8B + ModRM(rax<-src) */
+                emit1(c,(uint8_t)(0x48|(pr>=8?1:0)));
+                emit1(c,0x8B);
+                emit1(c,modrm(3,EAX,pr&7));
+            } else {
+                /* mov rax, [rbp+off] (64bit) */
+                emit1(c,0x48); emit1(c,0x8B);
+                int off=c->vregs[i].stack_off;
+                if(off>=-128&&off<=127){ emit1(c,modrm(1,EAX,RBP)); emit1(c,(uint8_t)(int8_t)off); }
+                else { emit1(c,modrm(2,EAX,RBP)); emit_i32(c,off); }
+            }
+        } else {
+            emit1(c,0x31); emit1(c,0xC0); /* xor eax,eax */
+        }
+    } else if(is_imm(val)){
+        int32_t v=atoi(val);
+        emit_mov_r32_imm(c,EAX,v);
+        emit3(c,0x48,0x63,0xC0); /* movsx rax,eax */
+    } else {
+        emit1(c,0x31); emit1(c,0xC0);
+    }
+}
 
 /* $シンボルのアドレスをraxに64bitでロード（LEA相当）
  * PIE: シンボルVMAはwrite_exe内で確定するため、
@@ -428,6 +473,30 @@ static void parse_line(CaiContext *c, char *line){
         NEXT; if(tok) strncpy(ins->a,tok,MAX_NAME-1);
         ins->argc=0;
         while((NEXT)&&ins->argc<3) strncpy(ins->args[ins->argc++],tok,MAX_NAME-1);
+    } else if(!strcmp(tok,"storep")){
+        /* storep %ptr %val — [ptr]に64bit値をストア */
+        ins->kind=OP_STOREP;
+        NEXT; if(tok) strncpy(ins->dst,tok,MAX_NAME-1); /* ptr */
+        NEXT; if(tok) strncpy(ins->a,tok,MAX_NAME-1);   /* val */
+    } else if(!strcmp(tok,"loadp2")){
+        /* loadp2 %dst %ptr — [ptr]から64bitロード */
+        ins->kind=OP_LOADP2;
+        NEXT; if(tok) strncpy(ins->dst,tok,MAX_NAME-1);
+        NEXT; if(tok) strncpy(ins->a,tok,MAX_NAME-1);
+    } else if(!strcmp(tok,"addp")){
+        /* addp %dst %ptr %off — ポインタ(64bit)+オフセット(32bit) */
+        ins->kind=OP_ADDP;
+        NEXT; if(tok) strncpy(ins->dst,tok,MAX_NAME-1);
+        NEXT; if(tok) strncpy(ins->a,tok,MAX_NAME-1);   /* ptr */
+        NEXT; if(tok) strncpy(ins->b,tok,MAX_NAME-1);   /* off */
+    } else if(!strcmp(tok,"loadb")){
+        ins->kind=OP_LOADB;
+        NEXT; if(tok) strncpy(ins->dst,tok,MAX_NAME-1);
+        NEXT; if(tok) strncpy(ins->a,tok,MAX_NAME-1);
+    } else if(!strcmp(tok,"storeb")){
+        ins->kind=OP_STOREB;
+        NEXT; if(tok) strncpy(ins->dst,tok,MAX_NAME-1);
+        NEXT; if(tok) strncpy(ins->a,tok,MAX_NAME-1);
     } else { ins->kind=OP_COMMENT; }
     #undef NEXT
     c->instr_count++;
@@ -598,8 +667,16 @@ static void gen_func(CaiContext *c, FuncInfo *fn){
         if(idx>=0){
             if(c->vregs[idx].phys_reg>=0)
                 emit_mov_r32(c,phys_to_reg(c->vregs[idx].phys_reg),argregs64[i]);
-            else
-                emit_store_r32(c,argregs64[i],c->vregs[idx].stack_off);
+            else {
+                /* 引数レジスタ(64bit)をスタックに64bitで保存
+                 * mov [rbp+off], r64: REX.W + REX.R(if src>=8) + 89 + ModRM */
+                int ar=argregs64[i];
+                int off=c->vregs[idx].stack_off;
+                emit1(c,(uint8_t)(0x48|(ar>=8?4:0)));
+                emit1(c,0x89);
+                if(off>=-128&&off<=127){ emit1(c,modrm(1,ar&7,RBP)); emit1(c,(uint8_t)(int8_t)off); }
+                else { emit1(c,modrm(2,ar&7,RBP)); emit_i32(c,off); }
+            }
         }
     }
 
@@ -745,10 +822,22 @@ static void gen_func(CaiContext *c, FuncInfo *fn){
         case OP_CALL: {
             for(int j=0;j<NUM_ALLOC_REGS;j++) if(c->reg_used[j]) emit_push(c,phys_to_reg(j));
             for(int j=0;j<ins->argc&&j<6;j++){
-                load_to_eax(c,ins->args[j]);
                 int ar=argregs64[j];
-                emit1(c,(uint8_t)(ar>=8?0x4C:0x48)); emit1(c,0x63);
-                emit1(c,modrm(3,ar&7,EAX));
+                if(ins->args[j][0]=='$'){
+                    /* $シンボル: lea r64,[rip+rel32] で64bitアドレスを引数レジスタに直接設定 */
+                    load_sym_addr_to_rax(c,ins->args[j]);
+                    /* mov ar, rax (64bit) */
+                    emit1(c,(uint8_t)(0x48|(ar>=8?1:0)));
+                    emit1(c,0x89);
+                    emit1(c,modrm(3,EAX,ar&7));
+                } else {
+                    /* %vreg または即値: load_ptr_to_raxで64bit対応ロード */
+                    load_ptr_to_rax(c,ins->args[j]);
+                    /* mov ar64, rax */
+                    emit1(c,(uint8_t)(0x48|(ar>=8?1:0)));
+                    emit1(c,0x89);
+                    emit1(c,modrm(3,EAX,ar&7));
+                }
             }
             reset_eax(c);
             const char *callee=ins->a; if(callee[0]=='$') callee++;
@@ -808,16 +897,8 @@ static void gen_func(CaiContext *c, FuncInfo *fn){
                 emit1(c,modrm(3,EAX,(dreg)&7)); \
             } while(0)
             #define LOAD_ARG_TO_REG(argval, dreg) do { \
-                if((argval)[0]=='$'){ \
-                    load_sym_addr_to_rax(c,(argval)); \
-                    if((dreg)!=EAX) MOV_RAX_TO_R64(dreg); \
-                } else { \
-                    reset_eax(c); \
-                    load_to_eax(c,(argval)); \
-                    emit1(c,(uint8_t)(0x48|((dreg)>=8?4:0))); \
-                    emit1(c,0x63); \
-                    emit1(c,modrm(3,(dreg)&7,EAX)); \
-                } \
+                load_ptr_to_rax(c,(argval)); \
+                if((dreg)!=EAX) MOV_RAX_TO_R64(dreg); \
             } while(0)
 
             /* arg2 → rdx */
@@ -865,6 +946,137 @@ static void gen_func(CaiContext *c, FuncInfo *fn){
              * eaxに結果が入っている（raxの下位32bit） */
             reset_eax(c);
             if(ins->dst[0]&&ins->dst[0]!='_') store_eax_to(c,ins->dst);
+            break;
+        }
+
+        case OP_STOREP: {
+            /* storep %ptr %val
+             * val(64bit)を[ptr]（スタック上の変数スロット）に書く
+             * ptrはスタックオフセットとして扱う（アドレスではなく変数名）
+             * 用途: 64bitポインタ値をスタックに保存
+             */
+            /* val → rax (64bit) */
+            load_ptr_to_rax(c,ins->a);
+            /* mov [rbp+off], rax (64bit) or mov phys_reg, rax */
+            int di2=find_vreg(c,ins->dst);
+            if(di2<0) di2=alloc_slot(c,ins->dst);
+            if(c->vregs[di2].phys_reg>=0){
+                int pr=phys_to_reg(c->vregs[di2].phys_reg);
+                emit1(c,0x48); emit1(c,0x89); emit1(c,modrm(3,EAX,pr));
+            } else {
+                int off=c->vregs[di2].stack_off;
+                emit1(c,0x48); emit1(c,0x89);
+                if(off>=-128&&off<=127){ emit1(c,modrm(1,EAX,RBP)); emit1(c,(uint8_t)(int8_t)off); }
+                else { emit1(c,modrm(2,EAX,RBP)); emit_i32(c,off); }
+            }
+            reset_eax(c);
+            break;
+        }
+
+        case OP_LOADP2: {
+            /* loadp2 %dst %ptr
+             * スタック上の変数スロットから64bit値をraxにロード
+             * 用途: 64bitポインタ値の読み出し
+             */
+            load_ptr_to_rax(c,ins->a);
+            /* dstに64bitで保存 */
+            reset_eax(c);
+            {
+                int di=find_vreg(c,ins->dst);
+                if(di<0) di=alloc_slot(c,ins->dst);
+                if(c->vregs[di].phys_reg>=0){
+                    int pr=phys_to_reg(c->vregs[di].phys_reg);
+                    emit1(c,0x48); emit1(c,0x89); emit1(c,modrm(3,EAX,pr));
+                } else {
+                    int off=c->vregs[di].stack_off;
+                    emit1(c,0x48); emit1(c,0x89);
+                    if(off>=-128&&off<=127){ emit1(c,modrm(1,EAX,RBP)); emit1(c,(uint8_t)(int8_t)off); }
+                    else { emit1(c,modrm(2,EAX,RBP)); emit_i32(c,off); }
+                }
+            }
+            break;
+        }
+
+        case OP_ADDP: {
+            /* addp %dst %ptr %off
+             * 64bitポインタ + 32bitオフセット → 64bitポインタ
+             * 手順:
+             *   1. ptrを64bitでraxにロード
+             *   2. offを32bitでrcxにロード → movsx rcx,ecx で64bit化
+             *   3. add rax, rcx
+             *   4. dstに保存（64bitアドレスとして）
+             */
+            /* ptr → rax (64bit) */
+            load_ptr_to_rax(c,ins->a);
+            /* off → rcx (32bit → 64bit符号拡張) */
+            reset_eax(c);
+            if(is_imm(ins->b)){
+                int32_t v=atoi(ins->b);
+                if(v==0){
+                    /* add rax,0 は不要 */
+                } else {
+                    /* add rax, imm32 (64bit): 48 05 <imm32> または 48 83 C0 <imm8> */
+                    if(v>=-128&&v<=127){ emit3(c,0x48,0x83,0xC0); emit1(c,(uint8_t)(int8_t)v); }
+                    else { emit1(c,0x48); emit1(c,0x05); emit_i32(c,v); }
+                }
+            } else {
+                load_to_eax(c,ins->b);
+                /* movsx rcx, eax */
+                emit1(c,0x48); emit1(c,0x63); emit1(c,modrm(3,ECX,EAX));
+                /* add rax, rcx (64bit): 48 01 C8 */
+                emit3(c,0x48,0x01,0xC8);
+            }
+            /* dstに64bitアドレスを保存
+             * store_eax_toは32bitなので直接スタックに64bitで書く */
+            reset_eax(c);
+            {
+                int di=find_vreg(c,ins->dst);
+                if(di<0) di=alloc_slot(c,ins->dst);
+                if(c->vregs[di].phys_reg>=0){
+                    /* 物理レジスタに入れる（32bit MOVでOK、上位32bitはゼロ） */
+                    int pr=phys_to_reg(c->vregs[di].phys_reg);
+                    emit1(c,0x48); emit1(c,0x89); emit1(c,modrm(3,EAX,pr));
+                } else {
+                    /* mov [rbp+off], rax (64bit): 48 89 45 <off> */
+                    int off=c->vregs[di].stack_off;
+                    emit1(c,0x48); emit1(c,0x89);
+                    if(off>=-128&&off<=127){ emit1(c,modrm(1,EAX,RBP)); emit1(c,(uint8_t)(int8_t)off); }
+                    else { emit1(c,modrm(2,EAX,RBP)); emit_i32(c,off); }
+                }
+            }
+            break;
+        }
+
+        case OP_LOADB: {
+            /* loadb %dst %ptr
+             * ptrに入っている64bitアドレスの指す先から1バイトをゼロ拡張してロード
+             * movzx eax, byte ptr [rax]
+             */
+            reset_eax(c);
+            load_ptr_to_rax(c,ins->a);
+            /* movzx eax, byte ptr [rax]: 0F B6 00 */
+            emit3(c,0x0F,0xB6,0x00);
+            reset_eax(c);
+            store_eax_to(c,ins->dst);
+            break;
+        }
+
+        case OP_STOREB: {
+            /* storeb %ptr %val
+             * valの下位8bit（al）を[ptr]に書き込む
+             * 1. ptrのアドレス(64bit)をraxに取得 → rcxに移動
+             * 2. valをeaxにロードしalを使う
+             * 3. mov byte ptr [rcx], al
+             */
+            /* ptr(64bit address) → rcx */
+            load_ptr_to_rax(c,ins->dst);
+            emit1(c,0x48); emit1(c,0x89); emit1(c,modrm(3,EAX,ECX));
+            /* val → eax (下位8bit=al を使う) */
+            reset_eax(c);
+            load_to_eax(c,ins->a);
+            /* mov byte ptr [rcx], al: 88 01 */
+            emit2(c,0x88,0x01);
+            reset_eax(c);
             break;
         }
 
