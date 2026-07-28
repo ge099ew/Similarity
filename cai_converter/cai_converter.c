@@ -56,6 +56,7 @@ typedef enum {
     OP_ITOF, OP_FTOI, OP_MOV,
     OP_EXTERN, OP_FUNC, OP_ENDFUNC,
     OP_DATA,
+    OP_SYSCALL, /* syscall %dst <nr> <arg0> <arg1> <arg2> */
     OP_COMMENT,
 } OpKind;
 
@@ -286,9 +287,38 @@ static void store_eax_to(CaiContext *c, const char *dst){
     set_eax(c,dst);
 }
 
+/* 前方宣言 */
+static void sym_ref(CaiContext *c, const char *name);
+
+/* $シンボルのアドレスをraxに64bitでロード（LEA相当）
+ * PIE: シンボルVMAはwrite_exe内で確定するため、
+ * ここでは mov rax, imm64 のimm64部分をパッチ登録する。
+ * 実際には lea rax, [rip+rel32] を使う（PIE安全）。
+ */
+static void load_sym_addr_to_rax(CaiContext *c, const char *sym){
+    const char *name = sym; if(name[0]=='$') name++;
+    sym_ref(c, name);
+    /* lea rax, [rip + rel32]
+     * 48 8D 05 <rel32>
+     * rel32 = sym_vma - (patch_vma + 4) → write_exe時に確定
+     */
+    emit1(c,0x48); emit1(c,0x8D); emit1(c,0x05);
+    int po = c->code_size; emit_i32(c,0);
+    c->patches[c->patch_count].code_off = po;
+    strncpy(c->patches[c->patch_count].sym, name, MAX_NAME-1);
+    c->patch_count++;
+}
+
 static void load_to_eax(CaiContext *c, const char *val){
     if(eax_has(c,val)) return;
-    if(val[0]=='%'){
+    if(val[0]=='$'){
+        /* dataラベル等のシンボルアドレスをraxにロード */
+        load_sym_addr_to_rax(c, val);
+        /* raxに64bitアドレスが入っている。
+         * eax(32bit)ではなくraxを使うため、store_eax_toは使わず
+         * 呼び出し側でraxをそのまま使う必要がある。
+         * ここではeax_holdsにvalを記録してキャッシュ扱いにする。 */
+    } else if(val[0]=='%'){
         int i=find_vreg(c,val);
         if(i>=0){
             if(c->vregs[i].phys_reg>=0){
@@ -392,6 +422,12 @@ static void parse_line(CaiContext *c, char *line){
                 ins->str_val[slen]='\0';
             }
         }
+    } else if(!strcmp(tok,"syscall")){
+        ins->kind=OP_SYSCALL;
+        NEXT; if(tok) strncpy(ins->dst,tok,MAX_NAME-1);
+        NEXT; if(tok) strncpy(ins->a,tok,MAX_NAME-1);
+        ins->argc=0;
+        while((NEXT)&&ins->argc<3) strncpy(ins->args[ins->argc++],tok,MAX_NAME-1);
     } else { ins->kind=OP_COMMENT; }
     #undef NEXT
     c->instr_count++;
@@ -406,7 +442,8 @@ static void parse_file(CaiContext *c, const char *path){
 
 /* ===== 関数解析 ===== */
 static int is_leaf(CaiContext *c, int s, int e){
-    for(int i=s;i<e;i++) if(c->instrs[i].kind==OP_CALL) return 0;
+    for(int i=s;i<e;i++)
+        if(c->instrs[i].kind==OP_CALL||c->instrs[i].kind==OP_SYSCALL) return 0;
     return 1;
 }
 static int count_params(CaiContext *c, int s, int e){
@@ -742,6 +779,94 @@ static void gen_func(CaiContext *c, FuncInfo *fn){
             emit1(c,0xC9); emit1(c,0xC3);
             reset_eax(c);
             break;
+
+        case OP_SYSCALL: {
+            /* syscall %dst <nr> <arg0> <arg1> <arg2>
+             *
+             * x86_64 syscall ABI:
+             *   rax = syscall番号
+             *   rdi = arg0
+             *   rsi = arg1
+             *   rdx = arg2
+             *   戻り値 = rax
+             *
+             * callee-savedを退避してからsyscallを発行する。
+             * syscallはrax/rcx/r11を破壊するが、
+             * callee-savedレジスタ（rbx/r12-r15）は保持される。
+             */
+            /* callee-saved退避 */
+            for(int j=0;j<NUM_ALLOC_REGS;j++) if(c->reg_used[j]) emit_push(c,phys_to_reg(j));
+
+            /* 引数をrdi/rsi/rdxに設定するヘルパー
+             * $シンボルの場合はload_sym_addr_to_raxでraxに64bitアドレスが入る。
+             * %vreg・即値の場合はeaxに32bit値が入り、movsxで64bitに拡張する。
+             */
+            /* mov rax -> r64_dst: REX.W + REX.B(if dst>=8) + 89 + ModRM */
+            #define MOV_RAX_TO_R64(dreg) do { \
+                emit1(c,(uint8_t)(0x48|((dreg)>=8?1:0))); \
+                emit1(c,0x89); \
+                emit1(c,modrm(3,EAX,(dreg)&7)); \
+            } while(0)
+            #define LOAD_ARG_TO_REG(argval, dreg) do { \
+                if((argval)[0]=='$'){ \
+                    load_sym_addr_to_rax(c,(argval)); \
+                    if((dreg)!=EAX) MOV_RAX_TO_R64(dreg); \
+                } else { \
+                    reset_eax(c); \
+                    load_to_eax(c,(argval)); \
+                    emit1(c,(uint8_t)(0x48|((dreg)>=8?4:0))); \
+                    emit1(c,0x63); \
+                    emit1(c,modrm(3,(dreg)&7,EAX)); \
+                } \
+            } while(0)
+
+            /* arg2 → rdx */
+            if(ins->argc>=3){
+                LOAD_ARG_TO_REG(ins->args[2], EDX);
+            } else {
+                emit1(c,0x48); emit1(c,0x31); emit1(c,modrm(3,EDX,EDX));
+            }
+
+            /* arg1 → rsi */
+            if(ins->argc>=2){
+                LOAD_ARG_TO_REG(ins->args[1], ESI);
+            } else {
+                emit1(c,0x48); emit1(c,0x31); emit1(c,modrm(3,ESI,ESI));
+            }
+
+            /* arg0 → rdi */
+            if(ins->argc>=1){
+                LOAD_ARG_TO_REG(ins->args[0], EDI);
+            } else {
+                emit1(c,0x48); emit1(c,0x31); emit1(c,modrm(3,EDI,EDI));
+            }
+            #undef LOAD_ARG_TO_REG
+
+            /* syscall番号 → rax */
+            if(is_imm(ins->a)){
+                int32_t nr=atoi(ins->a);
+                /* mov eax, imm32 → xor+mov */
+                if(nr==0){ emit1(c,0x31); emit1(c,0xC0); }
+                else { emit_mov_r32_imm(c,EAX,nr); }
+                /* movsx rax, eax */
+                emit3(c,0x48,0x63,0xC0);
+            } else {
+                load_to_eax(c,ins->a);
+                emit3(c,0x48,0x63,0xC0);
+            }
+
+            /* syscall命令 */
+            emit2(c,0x0F,0x05);
+
+            /* callee-saved復元 */
+            for(int j=NUM_ALLOC_REGS-1;j>=0;j--) if(c->reg_used[j]) emit_pop(c,phys_to_reg(j));
+
+            /* 戻り値（rax）をdstに保存
+             * eaxに結果が入っている（raxの下位32bit） */
+            reset_eax(c);
+            if(ins->dst[0]&&ins->dst[0]!='_') store_eax_to(c,ins->dst);
+            break;
+        }
 
         default: break;
         }

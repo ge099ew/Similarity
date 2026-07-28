@@ -2,39 +2,6 @@
 // Import[math{}]で使えるようになる関数群
 package stdlib
 
-// MathLib: mathライブラリのQBE IR定義
-// Import[math{}]が検出されたときcodegenに挿入される
-const MathLib = `
-# stdlib: math
-function w $absolute_value(w %x) {
-@start
-    %cond1 =w csltw %x, 0
-    jnz %cond1, @neg, @pos
-@neg
-    %r1 =w sub 0, %x
-    ret %r1
-@pos
-    ret %x
-}
-
-function w $maximum(w %a, w %b) {
-@start
-    %cond1 =w csgtw %a, %b
-    jnz %cond1, @retA, @retB
-@retA
-    ret %a
-@retB
-    ret %b
-}
-`
-
-// MathLibC: Cフォールバック用math実装
-const MathLibC = `
-// stdlib: math (C fallback)
-static int absolute_value(int x) { return x < 0 ? -x : x; }
-static int maximum(int a, int b) { return a > b ? a : b; }
-`
-
 // MathLibCAI: CAI形式のmath実装
 const MathLibCAI = `
 func $absolute_value
@@ -49,7 +16,6 @@ func $absolute_value
   label  abs_pos
   ret    %x
 endfunc
-
 func $maximum
   alloc  %a.ptr 4
   alloc  %b.ptr 4
@@ -66,10 +32,20 @@ func $maximum
 endfunc
 `
 
-// AvailableLibs: 利用可能なライブラリ一覧（QBE IR）
-var AvailableLibs = map[string]string{
-	"math": MathLib,
-	"io":   IoLib,
+// MathLibC: Cフォールバック用math実装
+const MathLibC = `
+// stdlib: math (C fallback)
+static int absolute_value(int x) { return x < 0 ? -x : x; }
+static int maximum(int a, int b) { return a > b ? a : b; }
+`
+
+// MathLib: QBE IR用（未使用、互換性のために残す）
+const MathLib = ``
+
+// AvailableLibsCAI: 利用可能なライブラリ一覧（CAI）
+var AvailableLibsCAI = map[string]string{
+	"math": MathLibCAI,
+	"io":   IoLibCAI,
 }
 
 // AvailableLibsC: 利用可能なライブラリ一覧（Cフォールバック）
@@ -78,8 +54,8 @@ var AvailableLibsC = map[string]string{
 	"io":   IoLibC,
 }
 
-// AvailableLibsCAI: 利用可能なライブラリ一覧（CAI）
-var AvailableLibsCAI = map[string]string{
-	"math": MathLibCAI,
-	"io":   IoLibCAI,
+// AvailableLibs: 利用可能なライブラリ一覧（QBE IR、互換性のために残す）
+var AvailableLibs = map[string]string{
+	"math": MathLib,
+	"io":   IoLib,
 }
