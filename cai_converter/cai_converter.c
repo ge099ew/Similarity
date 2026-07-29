@@ -62,6 +62,25 @@ typedef enum {
     OP_ADDP,    /* addp   %dst %ptr %off — ポインタ(64bit)にオフセット(32bit)を加算 */
     OP_STOREP,  /* storep %ptr %val      — 8バイト(64bit)をストア */
     OP_LOADP2,  /* loadp2 %dst %ptr      — 8バイト(64bit)をロード（loadpはCAI既存名と競合回避） */
+    /* ===== i64演算 ===== */
+    OP_ADD64,   /* add64 %dst %a %b  — 64bit加算 */
+    OP_SUB64,   /* sub64 %dst %a %b  — 64bit減算 */
+    OP_MUL64,   /* mul64 %dst %a %b  — 64bit乗算 */
+    OP_DIV64,   /* div64 %dst %a %b  — 64bit符号付き除算 */
+    OP_CLT64,   /* clt64 %dst %a %b  — 64bit比較 a < b */
+    OP_CLE64,   /* cle64 %dst %a %b  — 64bit比較 a <= b */
+    OP_CEQ64,   /* ceq64 %dst %a %b  — 64bit比較 a == b */
+    OP_CNE64,   /* cne64 %dst %a %b  — 64bit比較 a != b */
+    OP_CGT64,   /* cgt64 %dst %a %b  — 64bit比較 a > b */
+    OP_CGE64,   /* cge64 %dst %a %b  — 64bit比較 a >= b */
+    OP_MOV64,   /* mov64 %dst %src   — 64bitコピー */
+    /* ===== f32演算（SSE2） ===== */
+    OP_ADDF,    /* addf %dst %a %b   — f32加算 (addss) */
+    OP_SUBF,    /* subf %dst %a %b   — f32減算 (subss) */
+    OP_MULF,    /* mulf %dst %a %b   — f32乗算 (mulss) */
+    OP_DIVF,    /* divf %dst %a %b   — f32除算 (divss) */
+    OP_ITOF2,   /* itof2 %dst %src   — i32→f32 (cvtsi2ss) */
+    OP_FTOI2,   /* ftoi2 %dst %src   — f32→i32 (cvttss2si, 切り捨て) */
     OP_COMMENT,
 } OpKind;
 
@@ -92,6 +111,7 @@ typedef struct {
     int  phys_reg;
     int  use_count;
     int  is_ptr;
+    int  is_float; /* f32変数: 物理レジスタ割り当て禁止 */
 } VReg;
 
 /* ===== シンボル/パッチ/ラベル ===== */
@@ -296,6 +316,30 @@ static void store_eax_to(CaiContext *c, const char *dst){
 static void sym_ref(CaiContext *c, const char *name);
 static void load_sym_addr_to_rax(CaiContext *c, const char *sym);
 
+/* emit_rax_to_r64: mov r64_dst, rax
+ * 89方向: REX.W + REX.B(if dst>=8) + 89 + ModRM(reg=rax=0, rm=dst)
+ * rm=4(rsp/r12)のとき mod=3ならSIBバイト不要（mod=11時はSIBなし）
+ */
+static void emit_rax_to_r64(CaiContext *c, int pr){
+    /* mov r64_dst, rax: 89 /r where reg=rax(0), rm=pr
+     * mod=3(register): SIBバイト不要 */
+    emit1(c,(uint8_t)(0x48|(pr>=8?1:0)));  /* REX.W + REX.B */
+    emit1(c,0x89);
+    emit1(c,modrm(3,EAX,pr&7));  /* reg=rax(0)→src, rm=pr→dst */
+}
+
+/* emit_rax_to_slot: raxの値をvregのスタックスロットまたは物理レジスタに64bitで保存 */
+static void emit_rax_to_slot64(CaiContext *c, int vi){
+    if(c->vregs[vi].phys_reg>=0){
+        emit_rax_to_r64(c, phys_to_reg(c->vregs[vi].phys_reg));
+    } else {
+        int off=c->vregs[vi].stack_off;
+        emit1(c,0x48); emit1(c,0x89);
+        if(off>=-128&&off<=127){ emit1(c,modrm(1,EAX,RBP)); emit1(c,(uint8_t)(int8_t)off); }
+        else { emit1(c,modrm(2,EAX,RBP)); emit_i32(c,off); }
+    }
+}
+
 /* load_ptr_to_rax: ポインタ変数（64bit）をraxにロードする
  * 通常のload_to_eax（32bit）と異なり、64bitアドレスを保持する変数に使う。
  * $シンボル: lea rax,[rip+rel32]
@@ -311,11 +355,11 @@ static void load_ptr_to_rax(CaiContext *c, const char *val){
         if(i>=0){
             if(c->vregs[i].phys_reg>=0){
                 int pr=phys_to_reg(c->vregs[i].phys_reg);
-                /* mov rax, r64: REX.W + REX.B(if src>=8) + 89 + ModRM(src->rax)
-                 * または REX.W + 8B + ModRM(rax<-src) */
-                emit1(c,(uint8_t)(0x48|(pr>=8?1:0)));
+                /* mov rax, r64_src: REX.W+REX.B(if src>=8)+8B+ModRM(reg=rax=0,rm=src)
+                 * mod=3時はSIBバイト不要。rm=4(r12)もmod=11ならSIBなし */
+                emit1(c,(uint8_t)(0x48|(pr>=8?1:0)));  /* REX.W + REX.B */
                 emit1(c,0x8B);
-                emit1(c,modrm(3,EAX,pr&7));
+                emit1(c,modrm(3,EAX,pr&7));  /* reg=rax(dst), rm=pr(src) */
             } else {
                 /* mov rax, [rbp+off] (64bit) */
                 emit1(c,0x48); emit1(c,0x8B);
@@ -489,6 +533,40 @@ static void parse_line(CaiContext *c, char *line){
         NEXT; if(tok) strncpy(ins->dst,tok,MAX_NAME-1);
         NEXT; if(tok) strncpy(ins->a,tok,MAX_NAME-1);   /* ptr */
         NEXT; if(tok) strncpy(ins->b,tok,MAX_NAME-1);   /* off */
+    } else if(!strcmp(tok,"add64")||!strcmp(tok,"sub64")||
+               !strcmp(tok,"mul64")||!strcmp(tok,"div64")){
+        ins->kind=!strcmp(tok,"add64")?OP_ADD64:!strcmp(tok,"sub64")?OP_SUB64:
+                  !strcmp(tok,"mul64")?OP_MUL64:OP_DIV64;
+        NEXT; if(tok) strncpy(ins->dst,tok,MAX_NAME-1);
+        NEXT; if(tok) strncpy(ins->a,tok,MAX_NAME-1);
+        NEXT; if(tok) strncpy(ins->b,tok,MAX_NAME-1);
+    } else if(!strcmp(tok,"clt64")||!strcmp(tok,"cle64")||!strcmp(tok,"ceq64")||
+               !strcmp(tok,"cne64")||!strcmp(tok,"cgt64")||!strcmp(tok,"cge64")){
+        ins->kind=!strcmp(tok,"clt64")?OP_CLT64:!strcmp(tok,"cle64")?OP_CLE64:
+                  !strcmp(tok,"ceq64")?OP_CEQ64:!strcmp(tok,"cne64")?OP_CNE64:
+                  !strcmp(tok,"cgt64")?OP_CGT64:OP_CGE64;
+        NEXT; if(tok) strncpy(ins->dst,tok,MAX_NAME-1);
+        NEXT; if(tok) strncpy(ins->a,tok,MAX_NAME-1);
+        NEXT; if(tok) strncpy(ins->b,tok,MAX_NAME-1);
+    } else if(!strcmp(tok,"mov64")){
+        ins->kind=OP_MOV64;
+        NEXT; if(tok) strncpy(ins->dst,tok,MAX_NAME-1);
+        NEXT; if(tok) strncpy(ins->a,tok,MAX_NAME-1);
+    } else if(!strcmp(tok,"addf")||!strcmp(tok,"subf")||
+               !strcmp(tok,"mulf")||!strcmp(tok,"divf")){
+        ins->kind=!strcmp(tok,"addf")?OP_ADDF:!strcmp(tok,"subf")?OP_SUBF:
+                  !strcmp(tok,"mulf")?OP_MULF:OP_DIVF;
+        NEXT; if(tok) strncpy(ins->dst,tok,MAX_NAME-1);
+        NEXT; if(tok) strncpy(ins->a,tok,MAX_NAME-1);
+        NEXT; if(tok) strncpy(ins->b,tok,MAX_NAME-1);
+    } else if(!strcmp(tok,"itof2")){
+        ins->kind=OP_ITOF2;
+        NEXT; if(tok) strncpy(ins->dst,tok,MAX_NAME-1);
+        NEXT; if(tok) strncpy(ins->a,tok,MAX_NAME-1);
+    } else if(!strcmp(tok,"ftoi2")){
+        ins->kind=OP_FTOI2;
+        NEXT; if(tok) strncpy(ins->dst,tok,MAX_NAME-1);
+        NEXT; if(tok) strncpy(ins->a,tok,MAX_NAME-1);
     } else if(!strcmp(tok,"loadb")){
         ins->kind=OP_LOADB;
         NEXT; if(tok) strncpy(ins->dst,tok,MAX_NAME-1);
@@ -566,6 +644,22 @@ static void init_regalloc(CaiContext *c, FuncInfo *fn){
     }
     count_uses(c,fn->instr_start,fn->instr_end);
 
+    /* f32命令のdst/srcにis_float=1を設定（物理レジスタ割り当て禁止） */
+    for(int i=fn->instr_start;i<fn->instr_end;i++){
+        Instr *ins=&c->instrs[i];
+        int is_f=(ins->kind==OP_ADDF||ins->kind==OP_SUBF||
+                  ins->kind==OP_MULF||ins->kind==OP_DIVF||
+                  ins->kind==OP_ITOF2||ins->kind==OP_FTOI2);
+        if(!is_f) continue;
+        /* dst と src(a,b) にis_float=1 */
+        const char *fns[]={ins->dst,ins->a,ins->b};
+        for(int j=0;j<3;j++){
+            if(fns[j][0]!='%') continue;
+            int vi=find_vreg(c,fns[j]);
+            if(vi>=0) c->vregs[vi].is_float=1;
+        }
+    }
+
     if(fn->is_leaf){
         for(int i=0;i<c->vreg_count-1;i++)
             for(int j=i+1;j<c->vreg_count;j++)
@@ -574,7 +668,7 @@ static void init_regalloc(CaiContext *c, FuncInfo *fn){
                 }
         int ri=0;
         for(int i=0;i<c->vreg_count&&ri<NUM_ALLOC_REGS;i++)
-            if(c->vregs[i].use_count>=2&&!c->vregs[i].is_ptr&&strncmp(c->vregs[i].name,"%arg",4)){
+            if(c->vregs[i].use_count>=2&&!c->vregs[i].is_ptr&&!c->vregs[i].is_float&&strncmp(c->vregs[i].name,"%arg",4)){
                 c->vregs[i].phys_reg=ri++; c->reg_used[c->vregs[i].phys_reg]=1;
             }
     }
@@ -890,7 +984,8 @@ static void gen_func(CaiContext *c, FuncInfo *fn){
              * $シンボルの場合はload_sym_addr_to_raxでraxに64bitアドレスが入る。
              * %vreg・即値の場合はeaxに32bit値が入り、movsxで64bitに拡張する。
              */
-            /* mov rax -> r64_dst: REX.W + REX.B(if dst>=8) + 89 + ModRM */
+            /* mov r64_dst, rax: REX.W+REX.B(if dst>=8)+89+ModRM(reg=rax=0,rm=dst)
+             * mod=3時はSIBバイト不要 */
             #define MOV_RAX_TO_R64(dreg) do { \
                 emit1(c,(uint8_t)(0x48|((dreg)>=8?1:0))); \
                 emit1(c,0x89); \
@@ -957,18 +1052,9 @@ static void gen_func(CaiContext *c, FuncInfo *fn){
              */
             /* val → rax (64bit) */
             load_ptr_to_rax(c,ins->a);
-            /* mov [rbp+off], rax (64bit) or mov phys_reg, rax */
-            int di2=find_vreg(c,ins->dst);
-            if(di2<0) di2=alloc_slot(c,ins->dst);
-            if(c->vregs[di2].phys_reg>=0){
-                int pr=phys_to_reg(c->vregs[di2].phys_reg);
-                emit1(c,0x48); emit1(c,0x89); emit1(c,modrm(3,EAX,pr));
-            } else {
-                int off=c->vregs[di2].stack_off;
-                emit1(c,0x48); emit1(c,0x89);
-                if(off>=-128&&off<=127){ emit1(c,modrm(1,EAX,RBP)); emit1(c,(uint8_t)(int8_t)off); }
-                else { emit1(c,modrm(2,EAX,RBP)); emit_i32(c,off); }
-            }
+            { int di2=find_vreg(c,ins->dst);
+              if(di2<0) di2=alloc_slot(c,ins->dst);
+              emit_rax_to_slot64(c,di2); }
             reset_eax(c);
             break;
         }
@@ -981,19 +1067,8 @@ static void gen_func(CaiContext *c, FuncInfo *fn){
             load_ptr_to_rax(c,ins->a);
             /* dstに64bitで保存 */
             reset_eax(c);
-            {
-                int di=find_vreg(c,ins->dst);
-                if(di<0) di=alloc_slot(c,ins->dst);
-                if(c->vregs[di].phys_reg>=0){
-                    int pr=phys_to_reg(c->vregs[di].phys_reg);
-                    emit1(c,0x48); emit1(c,0x89); emit1(c,modrm(3,EAX,pr));
-                } else {
-                    int off=c->vregs[di].stack_off;
-                    emit1(c,0x48); emit1(c,0x89);
-                    if(off>=-128&&off<=127){ emit1(c,modrm(1,EAX,RBP)); emit1(c,(uint8_t)(int8_t)off); }
-                    else { emit1(c,modrm(2,EAX,RBP)); emit_i32(c,off); }
-                }
-            }
+            { int di=find_vreg(c,ins->dst); if(di<0) di=alloc_slot(c,ins->dst);
+              emit_rax_to_slot64(c,di); }
             break;
         }
 
@@ -1026,24 +1101,9 @@ static void gen_func(CaiContext *c, FuncInfo *fn){
                 /* add rax, rcx (64bit): 48 01 C8 */
                 emit3(c,0x48,0x01,0xC8);
             }
-            /* dstに64bitアドレスを保存
-             * store_eax_toは32bitなので直接スタックに64bitで書く */
             reset_eax(c);
-            {
-                int di=find_vreg(c,ins->dst);
-                if(di<0) di=alloc_slot(c,ins->dst);
-                if(c->vregs[di].phys_reg>=0){
-                    /* 物理レジスタに入れる（32bit MOVでOK、上位32bitはゼロ） */
-                    int pr=phys_to_reg(c->vregs[di].phys_reg);
-                    emit1(c,0x48); emit1(c,0x89); emit1(c,modrm(3,EAX,pr));
-                } else {
-                    /* mov [rbp+off], rax (64bit): 48 89 45 <off> */
-                    int off=c->vregs[di].stack_off;
-                    emit1(c,0x48); emit1(c,0x89);
-                    if(off>=-128&&off<=127){ emit1(c,modrm(1,EAX,RBP)); emit1(c,(uint8_t)(int8_t)off); }
-                    else { emit1(c,modrm(2,EAX,RBP)); emit_i32(c,off); }
-                }
-            }
+            { int di=find_vreg(c,ins->dst); if(di<0) di=alloc_slot(c,ins->dst);
+              emit_rax_to_slot64(c,di); }
             break;
         }
 
@@ -1077,6 +1137,139 @@ static void gen_func(CaiContext *c, FuncInfo *fn){
             /* mov byte ptr [rcx], al: 88 01 */
             emit2(c,0x88,0x01);
             reset_eax(c);
+            break;
+        }
+
+        /* ===== i64演算 ===== */
+        case OP_ADD64: case OP_SUB64: case OP_MUL64: case OP_DIV64: {
+            /* i64演算: REX.W=1 で64bit演算を行う
+             * a,bをrax/rcxに64bitでロードして演算し、dstに64bitで保存 */
+            load_ptr_to_rax(c,ins->a);
+            /* mov rcx, rax */
+            emit1(c,0x48); emit1(c,0x89); emit1(c,modrm(3,EAX,ECX));
+            load_ptr_to_rax(c,ins->b);
+            /* 演算: rax op rcx → rax */
+            if(ins->kind==OP_ADD64){
+                emit3(c,0x48,0x01,0xC8); /* add rax, rcx */
+            } else if(ins->kind==OP_SUB64){
+                /* sub rcx, rax; mov rax, rcx */
+                emit3(c,0x48,0x29,0xC1); /* sub rcx, rax */
+                emit3(c,0x48,0x89,0xC8); /* mov rax, rcx */
+            } else if(ins->kind==OP_MUL64){
+                emit1(c,0x48); emit3(c,0x0F,0xAF,0xC1); /* imul rax, rcx */
+            } else { /* DIV64 */
+                /* xchg rax,rcx; cqo; idiv rcx */
+                emit3(c,0x48,0x87,0xC1); /* xchg rax, rcx */
+                emit2(c,0x48,0x99);      /* cqo */
+                emit3(c,0x48,0xF7,0xF9); /* idiv rcx */
+            }
+            reset_eax(c);
+            { int di=find_vreg(c,ins->dst); if(di<0) di=alloc_slot(c,ins->dst);
+              emit_rax_to_slot64(c,di); }
+            break;
+        }
+
+        case OP_CLT64: case OP_CLE64: case OP_CEQ64:
+        case OP_CNE64: case OP_CGT64: case OP_CGE64: {
+            /* 64bit比較: REX.W=1 cmp + setcc */
+            load_ptr_to_rax(c,ins->a);
+            emit3(c,0x48,0x89,0xC1); /* mov rcx, rax */
+            load_ptr_to_rax(c,ins->b);
+            /* cmp rcx, rax (64bit) */
+            emit3(c,0x48,0x39,0xC1);
+            uint8_t cc[]={0x9C,0x9E,0x94,0x95,0x9F,0x9D};
+            int ci=(int)(ins->kind-OP_CLT64);
+            emit3(c,0x0F,cc[ci],0xC0); /* setcc al */
+            emit3(c,0x0F,0xB6,0xC0);   /* movzx eax, al */
+            reset_eax(c); store_eax_to(c,ins->dst);
+            break;
+        }
+
+        case OP_MOV64: {
+            /* 64bitコピー */
+            load_ptr_to_rax(c,ins->a);
+            reset_eax(c);
+            { int di=find_vreg(c,ins->dst); if(di<0) di=alloc_slot(c,ins->dst);
+              emit_rax_to_slot64(c,di); }
+            break;
+        }
+
+        /* ===== f32演算（SSE2） ===== */
+        /* f32はXMM0..XMM7レジスタを使う。
+         * 現状は全てメモリ経由（スタック上のfloatスロット）で行う。
+         * a→xmm0, b→xmm1, 演算, 結果→xmm0→dst
+         *
+         * float値はスタック上に4バイトとして格納する。
+         * movss xmm0, [rbp+off]: F3 0F 10 45/85 <off>
+         * movss [rbp+off], xmm0: F3 0F 11 45/85 <off>
+         */
+        case OP_ADDF: case OP_SUBF: case OP_MULF: case OP_DIVF: {
+            /* a → xmm0 */
+            { int si=find_vreg(c,ins->a);
+              int off=(si>=0)?c->vregs[si].stack_off:0;
+              /* movss xmm0, [rbp+off]: F3 0F 10 /r */
+              emit1(c,0xF3); emit1(c,0x0F); emit1(c,0x10);
+              if(off>=-128&&off<=127){ emit1(c,modrm(1,0,RBP)); emit1(c,(uint8_t)(int8_t)off); }
+              else { emit1(c,modrm(2,0,RBP)); emit_i32(c,off); }
+            }
+            /* b → xmm1 */
+            { int si=find_vreg(c,ins->b);
+              int off=(si>=0)?c->vregs[si].stack_off:0;
+              emit1(c,0xF3); emit1(c,0x0F); emit1(c,0x10);
+              /* xmm1: ModRM reg=1 */
+              if(off>=-128&&off<=127){ emit1(c,modrm(1,1,RBP)); emit1(c,(uint8_t)(int8_t)off); }
+              else { emit1(c,modrm(2,1,RBP)); emit_i32(c,off); }
+            }
+            /* 演算: xmm0 op xmm1 → xmm0 */
+            uint8_t fop=ins->kind==OP_ADDF?0x58:ins->kind==OP_SUBF?0x5C:
+                        ins->kind==OP_MULF?0x59:0x5E;
+            /* F3 0F <op> xmm0, xmm1: F3 0F <op> C1 */
+            emit1(c,0xF3); emit1(c,0x0F); emit1(c,fop);
+            emit1(c,modrm(3,0,1)); /* xmm0, xmm1 */
+            /* xmm0 → dst（スタック） */
+            { int di=find_vreg(c,ins->dst); if(di<0) di=alloc_slot(c,ins->dst);
+              int off=c->vregs[di].stack_off;
+              /* movss [rbp+off], xmm0: F3 0F 11 45/85 <off> */
+              emit1(c,0xF3); emit1(c,0x0F); emit1(c,0x11);
+              if(off>=-128&&off<=127){ emit1(c,modrm(1,0,RBP)); emit1(c,(uint8_t)(int8_t)off); }
+              else { emit1(c,modrm(2,0,RBP)); emit_i32(c,off); }
+            }
+            reset_eax(c);
+            break;
+        }
+
+        case OP_ITOF2: {
+            /* i32 → f32: cvtsi2ss xmm0, eax
+             * F3 0F 2A /r */
+            load_to_eax(c,ins->a);
+            /* cvtsi2ss xmm0, eax: F3 0F 2A C0 */
+            emit1(c,0xF3); emit1(c,0x0F); emit1(c,0x2A);
+            emit1(c,modrm(3,0,EAX));
+            /* xmm0 → dst */
+            { int di=find_vreg(c,ins->dst); if(di<0) di=alloc_slot(c,ins->dst);
+              int off=c->vregs[di].stack_off;
+              emit1(c,0xF3); emit1(c,0x0F); emit1(c,0x11);
+              if(off>=-128&&off<=127){ emit1(c,modrm(1,0,RBP)); emit1(c,(uint8_t)(int8_t)off); }
+              else { emit1(c,modrm(2,0,RBP)); emit_i32(c,off); }
+            }
+            reset_eax(c);
+            break;
+        }
+
+        case OP_FTOI2: {
+            /* f32 → i32: cvttss2si eax, xmm0 (切り捨て)
+             * F3 0F 2C /r */
+            { int si=find_vreg(c,ins->a);
+              int off=(si>=0)?c->vregs[si].stack_off:0;
+              /* movss xmm0, [rbp+off] */
+              emit1(c,0xF3); emit1(c,0x0F); emit1(c,0x10);
+              if(off>=-128&&off<=127){ emit1(c,modrm(1,0,RBP)); emit1(c,(uint8_t)(int8_t)off); }
+              else { emit1(c,modrm(2,0,RBP)); emit_i32(c,off); }
+            }
+            /* cvttss2si eax, xmm0: F3 0F 2C C0 */
+            emit1(c,0xF3); emit1(c,0x0F); emit1(c,0x2C);
+            emit1(c,modrm(3,EAX,0));
+            reset_eax(c); store_eax_to(c,ins->dst);
             break;
         }
 

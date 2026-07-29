@@ -15,8 +15,6 @@
 | QBE | QBEバイナリ + GCCリンカ |
 | **CAI** | **なし。C1本のみ（踏み台、一回限り）** |
 
-CAIはSimilarityが自分自身をビルドするための足場であり、最終的にはCAI変換器自体もSimilarityで書き直す（自己ホスト）。
-
 ---
 
 ## フェーズ
@@ -44,7 +42,7 @@ func $name
 endfunc
 ```
 
-- エントリーポイント: `export func $main`（変換器内で`sim_main`に変換）
+- エントリーポイント: `export func $main`
 - 公開関数: `export func $name`
 
 ---
@@ -55,26 +53,36 @@ endfunc
 |---|---|---|
 | `i32` | 4B | 32bit整数。演算・比較の基本型 |
 | `i64` | 8B | 64bit整数。ポインタ・アドレス用 |
-| `f32` | 4B | 32bit浮動小数点（将来実装） |
-
-**なぜi32中心か:** x86_64のABIでは32bit演算が最も効率的。64bitへの符号拡張（movsx）が必要な場面のみi64を使う。
+| `f32` | 4B | 32bit浮動小数点（SSE2） |
 
 ---
 
-## 命令セット（Phase 1 テキスト形式）
+## 命令セット
 
-### メモリ
+### メモリ（32bit）
 
 ```
 alloc  <dst> <size>        # スタック上にsize bytesを確保
-store  <ptr> <val>         # [ptr] = val（i32）
-load   <dst> <ptr>         # dst = [ptr]（i32）
+store  <ptr> <val>         # [ptr] = val（i32, 4バイト）
+load   <dst> <ptr>         # dst = [ptr]（i32, 4バイト）
 ```
 
-**なぜスタック中心か:** ヒープ管理はGCを必要とする。SimilarityはGCなしの設計のため、
-基本的にスタックアロケーションを使い、ヒープが必要な場合はsyscall（mmap）を直接呼ぶ。
+### メモリ（64bit / ポインタ）
 
-### 演算
+```
+storep <ptr> <val>         # [ptr] = val（i64, 8バイト）
+loadp2 <dst> <ptr>         # dst = [ptr]（i64, 8バイト）
+addp   <dst> <ptr> <off>   # dst = ptr + off（64bitポインタ + 32bitオフセット）
+```
+
+### メモリ（バイト単位）
+
+```
+loadb  <dst> <ptr>         # dst = *(uint8_t*)ptr（1バイトゼロ拡張ロード）
+storeb <ptr> <val>         # *(uint8_t*)ptr = val の下位8bit
+```
+
+### i32演算
 
 ```
 add  <dst> <a> <b>         # dst = a + b（i32）
@@ -83,13 +91,20 @@ mul  <dst> <a> <b>         # dst = a * b（i32）
 div  <dst> <a> <b>         # dst = a / b（i32、符号付き）
 ```
 
-**なぜ4命令のみか:** Phase 1の目標は「動くこと」であり、網羅性より正確性を優先した。
-浮動小数点・64bit演算はPhase 2で追加する。
-
-### 比較
+### i64演算
 
 ```
-clt  <dst> <a> <b>         # dst = (a <  b) ? 1 : 0
+add64 <dst> <a> <b>        # dst = a + b（i64）
+sub64 <dst> <a> <b>        # dst = a - b（i64）
+mul64 <dst> <a> <b>        # dst = a * b（i64）
+div64 <dst> <a> <b>        # dst = a / b（i64、符号付き）
+mov64 <dst> <src>          # dst = src（i64コピー）
+```
+
+### i32比較
+
+```
+clt  <dst> <a> <b>         # dst = (a <  b) ? 1 : 0（i32）
 cle  <dst> <a> <b>         # dst = (a <= b) ? 1 : 0
 ceq  <dst> <a> <b>         # dst = (a == b) ? 1 : 0
 cne  <dst> <a> <b>         # dst = (a != b) ? 1 : 0
@@ -97,7 +112,27 @@ cgt  <dst> <a> <b>         # dst = (a >  b) ? 1 : 0
 cge  <dst> <a> <b>         # dst = (a >= b) ? 1 : 0
 ```
 
-結果は必ず0または1（i32）。`jnz`と組み合わせて使う。
+### i64比較
+
+```
+clt64 <dst> <a> <b>        # dst = (a <  b) ? 1 : 0（i64）
+cle64 <dst> <a> <b>        # dst = (a <= b) ? 1 : 0
+ceq64 <dst> <a> <b>        # dst = (a == b) ? 1 : 0
+cne64 <dst> <a> <b>        # dst = (a != b) ? 1 : 0
+cgt64 <dst> <a> <b>        # dst = (a >  b) ? 1 : 0
+cge64 <dst> <a> <b>        # dst = (a >= b) ? 1 : 0
+```
+
+### f32演算（SSE2）
+
+```
+addf  <dst> <a> <b>        # dst = a + b（f32, addss）
+subf  <dst> <a> <b>        # dst = a - b（f32, subss）
+mulf  <dst> <a> <b>        # dst = a * b（f32, mulss）
+divf  <dst> <a> <b>        # dst = a / b（f32, divss）
+itof2 <dst> <src>          # dst = (f32)src（i32→f32, cvtsi2ss）
+ftoi2 <dst> <src>          # dst = (i32)src（f32→i32, cvttss2si 切り捨て）
+```
 
 ### 制御フロー
 
@@ -107,9 +142,6 @@ jmp   <label>              # 無条件ジャンプ（rel32）
 jnz   <cond> <t> <f>      # condが非ゼロなら<t>、ゼロなら<f>へ
 ```
 
-**なぜjnzのみか:** `if/else`・`loop`・`break`はすべて`jnz`+`jmp`の組み合わせで表現できる。
-命令セットを最小化することで変換器の実装が単純になる。
-
 ### 関数
 
 ```
@@ -118,7 +150,27 @@ ret   <val>                # 値を返して関数を終了
 ret                        # void return
 ```
 
-引数渡しはx86_64 System V ABI準拠（rdi, rsi, rdx, rcx, r8, r9、最大6個）。
+### syscall（x86_64 Linux）
+
+```
+syscall <dst> <nr> <arg0> <arg1> <arg2>
+```
+
+- `dst` = 戻り値を格納する仮想レジスタ
+- `nr`  = syscall番号（即値 or 変数）
+- `arg0`〜`arg2` = 引数（最大3個、即値 / 変数 / `$シンボル`）
+- x86_64 ABI: rax=nr, rdi=arg0, rsi=arg1, rdx=arg2
+
+**主要syscall番号（x86_64 Linux）:**
+
+| 番号 | 名前 | 用途 |
+|---|---|---|
+| 0 | read | ファイル読み込み |
+| 1 | write | ファイル書き込み |
+| 2 | open | ファイルオープン |
+| 3 | close | ファイルクローズ |
+| 60 | exit | プロセス終了 |
+| 228 | clock_gettime | 時刻取得 |
 
 ### データ（文字列定数）
 
@@ -126,16 +178,13 @@ ret                        # void return
 data  $label "文字列"      # 文字列を.rodataに配置しシンボルとして登録
 ```
 
-エスケープシーケンス対応: `\n` `\t` `\\` `\"`
+エスケープシーケンス: `\n` `\t` `\\` `\"`
 
-**なぜ.rodataか:** 文字列定数は変更不要のため、実行不可・書き込み不可の読み取り専用セグメントに置く。
-これにより誤った上書きをOS側で防止できる。
-
-### 型変換
+### 型変換（将来実装）
 
 ```
-itof  <dst> <src>          # i32 → f32（将来実装）
-ftoi  <dst> <src>          # f32 → i32（将来実装）
+itof  <dst> <src>          # i32 → f32（itof2を使用推奨）
+ftoi  <dst> <src>          # f32 → i32（ftoi2を使用推奨）
 ```
 
 ### 外部シンボル
@@ -156,11 +205,6 @@ extern <name>              # 外部シンボル宣言（.oファイル生成時�
 
 ## CAI変換器（cai_converter.c）
 
-### 設計方針
-
-**なぜCで書いたか:** 自己ホストの踏み台として、最も広く使えるCを選んだ。
-最終的にはSimilarity自身でCAI変換器を書き直す。Cは一回限りの踏み台にすぎない。
-
 ### 実装済み機能
 
 | 機能 | 詳細 |
@@ -173,7 +217,12 @@ extern <name>              # 外部シンボル宣言（.oファイル生成時�
 | セクションヘッダ | readelf・objdump・gdbでデバッグ可能 |
 | PT_DYNAMIC | ET_DYNとして正規化、デバッガ対応 |
 | PT_PHDR | プログラムヘッダの正規配置 |
-| syscall直接呼び出し | write / clock_gettime / exit |
+| syscall直接呼び出し | write / read / open / close / clock_gettime / exit |
+| i32演算 | add/sub/mul/div + 6比較 |
+| i64演算 | add64/sub64/mul64/div64 + 6比較 + mov64 |
+| f32演算 | addf/subf/mulf/divf + itof2/ftoi2（SSE2） |
+| バイト操作 | loadb/storeb |
+| ポインタ操作 | storep/loadp2/addp |
 | レジスタ割り当て | callee-saved（rbx, r12-r15）、use_count順 |
 | peephole最適化 | EAX追跡による冗長ロード除去 |
 | 未解決シンボル | 致命エラー（exit(1)）で即停止 |
@@ -189,20 +238,6 @@ PT_DYNAMIC   [R+W]  .dynamicセクション（ET_DYN正規化）
 PT_GNU_STACK [R+W]  スタック実行禁止（NX有効）
 ```
 
-### ファイルレイアウト
-
-```
-0x0000  ELFヘッダ（64B）
-0x0040  Program Headers（PHDRs）
-0x1000  .text（機械語、RX）
-        （pageアライン後）
-0xN000  .rodata（文字列定数、R）※あれば
-        （pageアライン後）
-0xM000  .dynamic（DT_DEBUG + DT_NULL、RW）
-        .shstrtab
-        セクションヘッダ
-```
-
 ---
 
 ## サンプル
@@ -215,9 +250,9 @@ func $fibonacci
   load   %n %n.ptr
   cle    %cond %n 1
   jnz    %cond base recurse
-label base
+  label  base
   ret    %n
-label recurse
+  label  recurse
   sub    %n1 %n 1
   call   %a $fibonacci %n1
   sub    %n2 %n 2
@@ -226,9 +261,12 @@ label recurse
   ret    %result
 endfunc
 
+# io_print（NUL終端文字列をstdoutに出力）
+data $hello "Hello, Similarity!\n"
+
 export func $main
-  call   %r $fibonacci 10
-  ret    %r
+  syscall %ret 1 1 $hello 19
+  ret    0
 endfunc
 ```
 
@@ -248,8 +286,7 @@ endfunc
 
 | 項目 | 優先度 |
 |---|---|
-| io stdlib（syscall直接: open/read/write/close） | 高 |
-| i64演算・f32演算の完全実装 | 高 |
+| i64演算の拡張 | 高 |
 | arm64対応 | 中 |
 | APE形式（Cosmopolitan、マルチOS） | 中 |
 | Phase 2: バイナリ形式 | 低 |
