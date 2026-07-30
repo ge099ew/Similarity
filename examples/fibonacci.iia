@@ -1,0 +1,20 @@
+# fibonacci(10) = 55
+
+Function[fibonacci{
+  receive{int(n)},
+  If[check{lesseq(n:1)},
+    True[return(n)],
+    False[
+      Variable[let{int(n1:-{int(n:1)})}]
+      Variable[let{int(a:call{fibonacci(n1)})}]
+      Variable[let{int(n2:-{int(n:2)})}]
+      Variable[let{int(b:call{fibonacci(n2)})}]
+      return(+{int(a:b)})
+    ]
+  ]
+}]
+
+Function_public[main{
+  Variable[let{int(result:call{fibonacci(10)})}]
+  return(result)
+}]

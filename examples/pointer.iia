@@ -1,0 +1,11 @@
+# ポインタ の例
+
+Function_public[main{
+  Variable[let{int(x:100)}]
+  Variable[let{int(ptr:addr{x})}]
+  Mem[risk{
+    Variable[let{int(val:deref{ptr})}]
+    return(val)
+  }]
+  return(0)
+}]

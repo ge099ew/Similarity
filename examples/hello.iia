@@ -1,0 +1,9 @@
+# Hello, Similarity!
+# Import[io{}]でio_printを使う
+
+Import[io{}]
+
+Function_public[main{
+  call{io_print($hello)}
+  return(0)
+}]

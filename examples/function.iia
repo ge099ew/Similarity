@@ -1,0 +1,18 @@
+# 関数定義と呼び出し
+
+Function[add{
+  receive{int(a), int(b)},
+  return(+{int(a:b)})
+}]
+
+Function[multiply{
+  receive{int(x), int(y)},
+  return(*{int(x:y)})
+}]
+
+Function_public[main{
+  Variable[let{int(r1:call{add(10, 32)})}]
+  Variable[let{int(r2:call{multiply(6, 7)})}]
+  Variable[let{int(result:+{int(r1:r2)})}]
+  return(result)
+}]

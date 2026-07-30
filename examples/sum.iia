@@ -1,0 +1,12 @@
+# 1から100の総和 = 5050
+
+Function_public[main{
+  Variable[let{int(sum:0)}]
+  Variable[let{int(i:0)}]
+  Loop[for{int(i:1), lesseq(i:100), step{1}},
+    Body[
+      Mutation[variable{int(sum:+{int(sum:i)})}]
+    ]
+  ]
+  return(sum)
+}]

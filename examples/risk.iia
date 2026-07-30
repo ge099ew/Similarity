@@ -1,0 +1,12 @@
+# Mem[risk{}] の例
+# unsafeな操作はrisk{}ブロックで明示する
+
+Function_public[main{
+  Variable[let{int(x:42)}]
+  Variable[let{int(ptr:addr{x})}]
+  Mem[risk{
+    Variable[let{int(val:deref{ptr})}]
+    return(val)
+  }]
+  return(0)
+}]

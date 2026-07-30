@@ -1,0 +1,10 @@
+# Async/share() の例
+
+Function_public[main{
+  Variable[let{int(x:0)}]
+  Async[{
+    share(x),
+    Mutation[variable{int(x:42)}]
+  }]
+  return(x)
+}]

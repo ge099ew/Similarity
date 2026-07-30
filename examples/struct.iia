@@ -1,0 +1,15 @@
+# 構造体の例
+
+Variable[struct{Point:int(x), int(y)}]
+
+Function[distance_sq{
+  receive{int(px), int(py)},
+  Variable[let{int(sq:+{int(*{int(px:px)}:*{int(py:py)})})}]
+  return(sq)
+}]
+
+Function_public[main{
+  Variable[let{p:Point(x:3, y:4)}]
+  Variable[let{int(result:call{distance_sq(3, 4)})}]
+  return(result)
+}]

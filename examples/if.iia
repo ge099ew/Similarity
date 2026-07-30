@@ -1,0 +1,15 @@
+# If/Else の例
+
+Function_public[main{
+  Variable[let{int(x:42)}]
+  Variable[let{int(result:0)}]
+  If[check{greater(x:40)},
+    True[
+      Mutation[variable{int(result:1)}]
+    ],
+    False[
+      Mutation[variable{int(result:0)}]
+    ]
+  ]
+  return(result)
+}]

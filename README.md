@@ -5,6 +5,7 @@
 C/C++を玉座から引きずり降ろすために設計されたシステムプログラミング言語。
 
 作者: 奇曲 宮夢 (Kikyoku Miyu)
+バージョン: v0.1.0 (Prototype)
 
 ---
 
@@ -22,6 +23,24 @@ Similarityはその全てを拒否する。
 
 ---
 
+## クイックスタート
+
+```bash
+# 1. ビルド
+go build -o sim ./cmd/
+gcc -O2 -o cai_conv cai_converter/cai_converter.c
+
+# 2. Hello World
+./sim --cai examples/hello.iia
+
+# 3. fibonacci
+./sim --cai examples/fibonacci.iia
+./examples/fibonacci.iia.out
+# → Similarity result: 55  time: 0ms
+```
+
+---
+
 ## コンパイラパイプライン
 
 ```
@@ -35,100 +54,63 @@ Similarityはその全てを拒否する。
 
 ---
 
-## ファイル形式
-
-| 拡張子 | 説明 |
-|---|---|
-| `.iia` | 低レイヤー構文（本来の形式） |
-| `.sml` | シュガーシンタックス（`.iia`にトランスパイルして使用） |
-| `.cai` | CAI IR（テキスト形式） |
-
----
-
-## 言語機能
+## 言語の特徴
 
 ### 基本パターン
 ```
 カテゴリ[操作{引数}]
 ```
 
-### 変数
+### 変数・制御フロー
 ```iia
 Variable[let{int(x:10)}]
-Variable[let{int(x:-5)}]
-Variable[unclet{float(PI:3.14)}]
-Mutation[variable{int(x:30)}]
-```
-
-### シュガーシンタックス（.sml）
-```sml
-Var[let{int(x:10)}]
-Func[name{...}]
-Func_pub[name{...}]
-App[name{args}]
-```
-
-### 制御フロー
-```iia
-If[check{less(hp:0)}, True[...], False[...]]
+If[check{less(x:0)}, True[...], False[...]]
 Loop[for{int(i:0), less(i:10), step{1}}, Body[...]]
-Loop[Count{int(i:10)}, Body[...]]
-break{}  /  continue{}
 ```
 
 ### 関数
 ```iia
-Function[name{
-  receive{int(x)},
-  処理,
-  return(x)
+Function[add{
+  receive{int(a), int(b)},
+  return(+{int(a:b)})
 }]
-Function_public[name{...}]
-call{name(args)}
 ```
 
-### ポインタ
+### 安全性
 ```iia
-Variable[let{int(x:42)}]
-Variable[let{int(ptr:addr{x})}]
 Mem[risk{
-  Variable[let{int(val:deref{ptr})}]
+  Variable[let{int(val:deref{ptr})}]  # unsafeを明示
 }]
-```
 
-### 配列・cast
-```iia
-Variable[let{Array_int(arr:0)}]
-Variable[let{int(val:index{arr(i)})}]
-Variable[let{float(y:cast{float(x)})}]
-```
-
-### 構造体
-```iia
-Variable[struct{User:String(name), int(age)}]
-Variable[let{user:User(name:"John", age:25)}]
-```
-
-### 非同期
-```iia
 Async[{
-  share(x),
+  share(x),                            # 共有変数を明示
   Mutation[variable{int(x:30)}]
 }]
-Await[task]
-```
-
-### エラーハンドリング
-```iia
-Error[try{処理}, Ok[...], Err[type{FileNotFound}, msg{"..."}]]
-Fatal[type{OutOfMemory}, msg{"回復不能"}]
 ```
 
 ### モジュール
 ```iia
+Import[io{}]
 Import[math{}]
-Extern[C{lib{"SDL2"}, draw{receive{int(x)}, return{}}}]
+Import[string{}]
 ```
+
+---
+
+## 標準ライブラリ
+
+| ライブラリ | 主要関数 |
+|---|---|
+| `math` | absolute_value, maximum, minimum, pow_int, clamp |
+| `io` | io_write, io_read, io_open, io_close, io_print |
+| `core` | panic, assert |
+| `string` | str_len, str_compare, str_copy |
+| `memory` | mem_copy, mem_set, mem_zero, mem_compare |
+| `sys` | sys_exit, sys_getpid, sys_sleep |
+| `time` | time_now_ms, time_sleep |
+| `random` | random_next, random_range |
+| `process` | process_exit, process_getpid |
+| `os` | os_mkdir, os_remove, os_rename |
 
 ---
 
@@ -136,7 +118,7 @@ Extern[C{lib{"SDL2"}, draw{receive{int(x)}, return{}}}]
 
 エラーは **`行:列: TypeCheck Error [コード]: メッセージ`** 形式で出力されます。
 
-| エラーコード | 内容 |
+| コード | 内容 |
 |---|---|
 | TC1001 | null許容型のnullチェックなしアクセス |
 | TC2001〜TC2010 | 型ミスマッチ・未宣言変数・配列型違反等 |
@@ -147,62 +129,49 @@ Extern[C{lib{"SDL2"}, draw{receive{int(x)}, return{}}}]
 
 ---
 
-## サポートシステム
+## ベンチマーク（vs C++ -O0）
 
-### Echo（project.eho）
-コンパイル時にプロジェクト全体をスキャンしてriskブロックを検出。`project.eho`としてプロジェクト単位で1つ生成されます。
-
-```
-╔══════════════════════════════════════════╗
-║        ⚠️   RISK BLOCK DETECTED  ⚠️        ║
-╚══════════════════════════════════════════╝
-
-  [1] main.iia : line 20-21
-      → deref use
-
-コンパイルを続行しますか？ [Y/n]:
-```
-
-### Cell（project.cel）
-```
-name: MyProject
-version: 0.1.0
-dependencies:
-  - math
-```
-
----
-
-## ベンチマーク結果（100回平均・コールドスタート）
-
-### 実行速度（CAIバックエンド vs C++ -O0）
-
-| 比較項目 | Similarity (CAI) | C++ (-O0) |
+| テスト | Similarity (CAI) | C++ (-O0) |
 |---|---|---|
-| fibonacci(40) | ~745ms | ~452ms |
-| 総和（0〜1億） | ~92ms | ~66ms |
-
-※ CAIバックエンドは最適化継続中。
-
-### フロントエンド速度（コンパイル時間）
-
-| 比較項目 | Similarity | C++ |
-|---|---|---|
-| 短いファイル | 2.25ms | 8.02ms（**3.6倍速い**） |
-| 長いファイル | 2.89ms | 8.22ms（**2.8倍速い**） |
-
----
-
-## 使い方
+| fibonacci(40) | ~709ms | ~985ms |
+| sum(0〜1億) | ~180ms | ~268ms |
+| ackermann(3,7) | ~12ms | ~5ms |
 
 ```bash
-# ビルド
-go build -o sim ./cmd/
-gcc -O2 -o cai_conv cai_converter/cai_converter.c
+bash benchmark/run_benchmark_all.sh
+```
 
-# 実行
-./sim --cai your_file.iia       # CAIバックエンド（GCC不要）
-./sim your_file.sml             # シュガーシンタックス
+---
+
+## ディレクトリ構成
+
+```
+Similarity/
+├── cmd/main.go              — エントリーポイント
+├── compiler/                — CompilerContext（Target/ABI/Options/Diagnostics）
+├── lexer/
+├── parser/
+├── ast/
+├── typecheck/
+├── caigen/                  — AST → CAI IR生成
+├── cai_converter/
+│   └── cai_converter.c      — CAI → x86_64機械語直接生成
+├── echo/                    — riskブロックスキャン
+├── cel/                     — project.cel管理
+├── stdlib/
+│   ├── math.go
+│   ├── io.go
+│   ├── core.go
+│   ├── string.go
+│   ├── memory.go
+│   ├── sys.go
+│   ├── time.go
+│   ├── random.go
+│   ├── process.go
+│   └── os.go
+├── examples/                — サンプルコード
+├── benchmark/               — ベンチマーク
+└── docs/                    — ドキュメント
 ```
 
 ---
@@ -212,31 +181,20 @@ gcc -O2 -o cai_conv cai_converter/cai_converter.c
 | 機能 | 状態 |
 |---|---|
 | lexer/parser | ✅ |
-| CAI IR（caigen） | ✅ |
-| CAI変換器（x86_64直接生成） | ✅ |
-| asの代替（機械語直接生成） | ✅ |
-| ldの代替（ELF直接生成） | ✅ |
+| typecheck | ✅ |
+| CAI IR生成 | ✅ |
+| x86_64機械語直接生成 | ✅ |
+| ELF直接生成 | ✅ |
 | 静的PIE（ET_DYN + ASLR） | ✅ |
 | NX（スタック実行禁止） | ✅ |
-| セクション分離（.text / .rodata / .dynamic） | ✅ |
-| セクションヘッダ（readelf/objdump/gdb対応） | ✅ |
-| CAI data命令（文字列定数→.rodata） | ✅ |
-| ポインタ（addr/deref） | ✅ |
-| 配列アクセス（index） | ✅ |
-| cast（int↔float） | ✅ |
-| 構造体（struct） | ✅ |
-| Mem[risk{}] | ✅ |
-| Async/Await（pthread） | ✅ |
-| share()（データ競合検出） | ✅ |
-| typecheck（行番号・列番号付きエラー） | ✅ |
+| i32/i64/f32演算 | ✅ |
+| syscall直接呼び出し | ✅ |
+| 標準ライブラリ（10種） | ✅ |
 | Echo（project.eho） | ✅ |
 | Cell（project.cel） | ✅ |
-| シュガーシンタックス（.sml） | ✅ |
-| stdlib/math | ✅ |
-| 標準ライブラリ拡張（io等） | 🔶 未着手 |
-| 各言語互換性レイヤー | 🔶 未着手 |
-| GPU本実装 | 🔶 CAI安定後 |
 | APE形式（マルチOS） | 🔶 未着手 |
+| 各言語互換性レイヤー | 🔶 未着手 |
+| GPU本実装 | 🔶 未着手 |
 | 自己ホスト | 📅 長期目標 |
 
 ---
@@ -251,21 +209,6 @@ gcc -O2 -o cai_conv cai_converter/cai_converter.c
 
 ---
 
-## 開発進捗
+## ライセンス
 
-### Phase 1: フロントエンド（✅ 完了）
-lexer / parser / AST / typecheck / Echo / Cell / シュガーシンタックス / stdlib/math
-
-### Phase 2: CAIバックエンド（🔶 進行中）
-- CAI IR設計・実装 ✅
-- caigen（AST→CAI IR生成）✅
-- cai_conv（CAI→x86_64機械語直接生成）✅
-- asの代替 ✅ / ldの代替 ✅
-- 静的PIE・NX・セクション分離 ✅
-- 標準ライブラリ拡張（io等）🔶
-- APE形式（Cosmopolitan、マルチOS）🔶
-
-### Phase 3: エコシステム（📅 未着手）
-- 各言語互換性レイヤー（Python/Rust/Java/C#/Odin/JS/Go/Zig）
-- GPU本実装
-- 自己ホスト
+MIT License — Copyright (c) 2026 Kikyoku Miyu (奇曲 宮夢)
