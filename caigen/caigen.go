@@ -9,7 +9,6 @@ import (
 )
 
 // ===== 定数（enum化） =====
-// LiteralNode.Kind
 const (
 	KindInt    = "INT"
 	KindFloat  = "FLOAT"
@@ -18,17 +17,15 @@ const (
 	KindIdent  = "IDENT"
 )
 
-// ConditionNode.Op
 const (
-	OpLess     = "less"
-	OpLessEq   = "lesseq"
-	OpEqual    = "equal"
-	OpNotEqual = "notequal"
-	OpGreater  = "greater"
+	OpLess      = "less"
+	OpLessEq    = "lesseq"
+	OpEqual     = "equal"
+	OpNotEqual  = "notequal"
+	OpGreater   = "greater"
 	OpGreaterEq = "greatereq"
 )
 
-// ExprNode.Op
 const (
 	OpAdd = "+"
 	OpSub = "-"
@@ -36,53 +33,78 @@ const (
 	OpDiv = "/"
 )
 
-// CAI命令名
 const (
 	CAIAlloc   = "alloc"
 	CAIStore   = "store"
 	CAILoad    = "load"
+	CAIStoreP  = "storep"
+	CAILoadP2  = "loadp2"
+	CAIAddP    = "addp"
+	CAILoadB   = "loadb"
+	CAIStoreB  = "storeb"
 	CAIAdd     = "add"
 	CAISub     = "sub"
 	CAIMul     = "mul"
 	CAIDiv     = "div"
+	CAIAdd64   = "add64"
+	CAISub64   = "sub64"
+	CAIMul64   = "mul64"
+	CAIDiv64   = "div64"
+	CAIAddF    = "addf"
+	CAISubF    = "subf"
+	CAIMulF    = "mulf"
+	CAIDivF    = "divf"
+	CAIItof2   = "itof2"
+	CAIFtoi2   = "ftoi2"
 	CAIClt     = "clt"
 	CAICle     = "cle"
 	CAICeq     = "ceq"
 	CAICne     = "cne"
 	CAICgt     = "cgt"
 	CAICge     = "cge"
+	CAIClt64   = "clt64"
+	CAICle64   = "cle64"
+	CAICeq64   = "ceq64"
+	CAICne64   = "cne64"
+	CAICgt64   = "cgt64"
+	CAICge64   = "cge64"
 	CAILabel   = "label"
 	CAIJmp     = "jmp"
 	CAIJnz     = "jnz"
 	CAICall    = "call"
 	CAIRet     = "ret"
-	CAIItof    = "itof"
-	CAIFtoi    = "ftoi"
-	CAILoadP   = "loadp"
 	CAIMov     = "mov"
 	CAISyscall = "syscall"
-	CAILoadB  = "loadb"
-	CAIStoreB = "storeb"
-	CAIStoreP = "storep"
-	CAILoadP2 = "loadp2"
-	CAIAddP   = "addp"
+	CAIData    = "data"
 )
+
+// ===== 型判定ヘルパー =====
+
+// isPtr64: ポインタ・64bit・文字列型かどうか
+func isPtr64(typeName string) bool {
+	switch typeName {
+	case "String", "ptr", "int64":
+		return true
+	}
+	return false
+}
+
+// isFloat: float型かどうか
+func isFloat(typeName string) bool {
+	return typeName == "float"
+}
 
 // ===== 型サイズ管理 =====
 
-// typeSizes は各型のスタック上のバイトサイズ
-// 将来のABI/Target切替に備えてここで一元管理する
 var typeSizes = map[string]int{
 	"int":    4,
 	"float":  4,
 	"bool":   4,
-	"String": 8, // ポインタサイズ
+	"String": 8,
 	"ptr":    8,
 	"int64":  8,
 }
 
-// sizeOf は型名からバイトサイズを返す
-// 未知の型はデフォルト4バイト
 func sizeOf(typeName string) int {
 	if s, ok := typeSizes[typeName]; ok {
 		return s
@@ -92,17 +114,14 @@ func sizeOf(typeName string) int {
 
 // ===== StructInfo =====
 
-// StructInfo は struct型の情報を保持する
-// Size/Alignmentは将来のABI対応で使用する
 type StructInfo struct {
 	Fields    []ast.StructField
-	Size      int // 構造体全体のバイトサイズ
-	Alignment int // アライメント
+	Size      int
+	Alignment int
 }
 
 func newStructInfo(fields []ast.StructField) StructInfo {
-	size := 0
-	align := 1
+	size, align := 0, 1
 	for _, f := range fields {
 		fs := sizeOf(f.Type)
 		size += fs
@@ -115,22 +134,21 @@ func newStructInfo(fields []ast.StructField) StructInfo {
 
 // ===== CAIGen =====
 
-// CAIGen は AST → CAI IR テキストを生成するコードジェネレータ
 type CAIGen struct {
 	out      strings.Builder
 	tmpIdx   int
 	labelIdx int
 	structs  map[string]StructInfo
+	// varTypes: 変数名 → 型名（store/load命令の選択に使う）
+	varTypes map[string]string
 }
 
-// New は CAIGen を生成する
 func New() *CAIGen {
 	return &CAIGen{
-		structs: make(map[string]StructInfo),
+		structs:  make(map[string]StructInfo),
+		varTypes: make(map[string]string),
 	}
 }
-
-// ===== Emitter =====
 
 func (c *CAIGen) emit(format string, args ...interface{}) {
 	fmt.Fprintf(&c.out, format+"\n", args...)
@@ -146,9 +164,28 @@ func (c *CAIGen) label() string {
 	return fmt.Sprintf("lbl%d", c.labelIdx)
 }
 
-// ===== Generate（分割済み） =====
+// ===== store/load命令の型別選択 =====
 
-// Generate はASTからCAI IRテキストを生成するエントリーポイント
+// emitStore: 型に応じてstore/storepを選択
+func (c *CAIGen) emitStore(indent, varName, val, typeName string) {
+	if isPtr64(typeName) {
+		c.emit("%s%s  %%%s.ptr %s", indent, CAIStoreP, varName, val)
+	} else {
+		c.emit("%s%s  %%%s.ptr %s", indent, CAIStore, varName, val)
+	}
+}
+
+// emitLoad: 型に応じてload/loadp2を選択
+func (c *CAIGen) emitLoad(indent, dst, varName, typeName string) {
+	if isPtr64(typeName) {
+		c.emit("%s%s  %s %%%s.ptr", indent, CAILoadP2, dst, varName)
+	} else {
+		c.emit("%s%s   %s %%%s.ptr", indent, CAILoad, dst, varName)
+	}
+}
+
+// ===== Generate =====
+
 func (c *CAIGen) Generate(prog *ast.Program) string {
 	c.emitHeader(prog)
 	c.emitImports(prog)
@@ -157,7 +194,6 @@ func (c *CAIGen) Generate(prog *ast.Program) string {
 	return c.out.String()
 }
 
-// emitHeader はファイル先頭のコメントヘッダを出力する
 func (c *CAIGen) emitHeader(prog *ast.Program) {
 	if prog.Explanation != nil {
 		c.emit("# Similarity - %s", prog.Explanation.Category)
@@ -168,7 +204,6 @@ func (c *CAIGen) emitHeader(prog *ast.Program) {
 	c.emit("")
 }
 
-// emitImports はextern宣言とstdlib展開を出力する（Pass1）
 func (c *CAIGen) emitImports(prog *ast.Program) {
 	for _, stmt := range prog.Statements {
 		switch n := stmt.(type) {
@@ -186,7 +221,6 @@ func (c *CAIGen) emitImports(prog *ast.Program) {
 	}
 }
 
-// collectStructs はstruct定義を収集する（Pass2）
 func (c *CAIGen) collectStructs(prog *ast.Program) {
 	for _, stmt := range prog.Statements {
 		v, ok := stmt.(*ast.VariableNode)
@@ -201,7 +235,6 @@ func (c *CAIGen) collectStructs(prog *ast.Program) {
 	}
 }
 
-// emitFunctions は関数定義のCAI IRを出力する（Pass3）
 func (c *CAIGen) emitFunctions(prog *ast.Program) {
 	for _, stmt := range prog.Statements {
 		if fn, ok := stmt.(*ast.FuncNode); ok {
@@ -213,25 +246,36 @@ func (c *CAIGen) emitFunctions(prog *ast.Program) {
 // ===== 関数生成 =====
 
 func (c *CAIGen) genFunc(fn *ast.FuncNode) {
+	// 関数スコープのvarTypesをリセット
+	savedTypes := c.varTypes
+	c.varTypes = make(map[string]string)
+	// 親スコープの型情報を引き継ぐ
+	for k, v := range savedTypes {
+		c.varTypes[k] = v
+	}
+
 	if fn.Public {
 		c.emit("export func $%s", fn.Name)
 	} else {
 		c.emit("func $%s", fn.Name)
 	}
 
-	// 引数をスタックに確保（型サイズ管理を使用）
+	// 引数をスタックに確保
 	for i, param := range fn.Params {
 		size := sizeOf(param.Type)
+		c.varTypes[param.Name] = param.Type
 		c.emit("  %s  %%%s.ptr %d", CAIAlloc, param.Name, size)
-		c.emit("  %s  %%%s.ptr %%arg%d", CAIStore, param.Name, i)
+		if isPtr64(param.Type) {
+			c.emit("  %s  %%%s.ptr %%arg%d", CAIStoreP, param.Name, i)
+		} else {
+			c.emit("  %s  %%%s.ptr %%arg%d", CAIStore, param.Name, i)
+		}
 	}
 
-	// ボディ
 	for _, stmt := range fn.Body {
 		c.genStmt(stmt, "  ")
 	}
 
-	// fn.Returns（旧構文互換）
 	if fn.Returns != nil {
 		val := c.genExpr(fn.Returns, "  ")
 		c.emit("  %s    %s", CAIRet, val)
@@ -239,6 +283,8 @@ func (c *CAIGen) genFunc(fn *ast.FuncNode) {
 
 	c.emit("endfunc")
 	c.emit("")
+
+	c.varTypes = savedTypes
 }
 
 // ===== 文生成 =====
@@ -252,17 +298,30 @@ func (c *CAIGen) genStmt(node ast.Node, indent string) {
 		if n.Type == "__struct__" {
 			return
 		}
+		// 文字列リテラルはdataラベルとして.rodataに配置
+		if lit, ok := n.Value.(*ast.LiteralNode); ok && lit.Kind == KindString {
+			label := fmt.Sprintf("$str_%s_%d", n.Name, c.tmpIdx)
+			c.tmpIdx++
+			c.emit("%s%s %s \"%s\"", indent, CAIData, label, lit.Value)
+			size := sizeOf(n.Type)
+			c.varTypes[n.Name] = n.Type
+			c.emit("%s%s  %%%s.ptr %d", indent, CAIAlloc, n.Name, size)
+			c.emit("%s%s  %%%s.ptr %s", indent, CAIStoreP, n.Name, label)
+			return
+		}
 		size := sizeOf(n.Type)
+		c.varTypes[n.Name] = n.Type
 		c.emit("%s%s  %%%s.ptr %d", indent, CAIAlloc, n.Name, size)
 		if n.Value != nil {
 			val := c.genExpr(n.Value, indent)
-			c.emit("%s%s  %%%s.ptr %s", indent, CAIStore, n.Name, val)
+			c.emitStore(indent, n.Name, val, n.Type)
 		}
 
 	case *ast.MutationNode:
 		if n.Value != nil {
 			val := c.genExpr(n.Value, indent)
-			c.emit("%s%s  %%%s.ptr %s", indent, CAIStore, n.Name, val)
+			typeName := c.varTypes[n.Name]
+			c.emitStore(indent, n.Name, val, typeName)
 		}
 
 	case *ast.ReturnNode:
@@ -293,7 +352,7 @@ func (c *CAIGen) genStmt(node ast.Node, indent string) {
 
 	case *ast.FatalNode:
 		c.emit("%s# Fatal: %s - %s", indent, n.ErrType, n.Msg)
-		c.emit("%s%s   %%_ $abort", indent, CAICall)
+		c.emit("%s%s   %%_ $panic", indent, CAICall)
 
 	case *ast.AsyncNode:
 		c.emit("%s# Async block (pthread)", indent)
@@ -356,15 +415,21 @@ func (c *CAIGen) genLoop(n *ast.LoopNode, indent string) {
 		c.genStmt(s, indent+"  ")
 	}
 
-	// Step生成（将来的にはStepNodeで柔軟化予定）
 	if n.Step != 0 {
 		if n.Init != nil {
 			if v, ok := n.Init.(*ast.VariableNode); ok {
 				dst := c.tmp()
 				t := c.tmp()
-				c.emit("%s%s   %s %%%s.ptr", indent, CAILoad, dst, v.Name)
-				c.emit("%s%s    %s %s %d", indent, CAIAdd, t, dst, n.Step)
-				c.emit("%s%s  %%%s.ptr %s", indent, CAIStore, v.Name, t)
+				typeName := c.varTypes[v.Name]
+				if isPtr64(typeName) {
+					c.emit("%s%s  %s %%%s.ptr", indent, CAILoadP2, dst, v.Name)
+					c.emit("%s%s  %s %s %d", indent, CAIAdd64, t, dst, n.Step)
+					c.emit("%s%s  %%%s.ptr %s", indent, CAIStoreP, v.Name, t)
+				} else {
+					c.emit("%s%s   %s %%%s.ptr", indent, CAILoad, dst, v.Name)
+					c.emit("%s%s    %s %s %d", indent, CAIAdd, t, dst, n.Step)
+					c.emit("%s%s  %%%s.ptr %s", indent, CAIStore, v.Name, t)
+				}
 			}
 		}
 	}
@@ -380,38 +445,48 @@ func (c *CAIGen) genCond(node ast.Node, indent string) string {
 	if !ok {
 		return c.genExpr(node, indent)
 	}
+
+	// 変数の型を見てi32/i64比較を選択
+	typeName := c.varTypes[cond.Left]
+	use64 := isPtr64(typeName)
+
 	left := c.loadStrVal(cond.Left, indent)
 	right := c.loadStrVal(cond.Right, indent)
 	dst := c.tmp()
 
 	var op string
-	switch cond.Op {
-	case OpLess:
-		op = CAIClt
-	case OpLessEq:
-		op = CAICle
-	case OpEqual:
-		op = CAICeq
-	case OpNotEqual:
-		op = CAICne
-	case OpGreater:
-		op = CAICgt
-	case OpGreaterEq:
-		op = CAICge
-	default:
-		op = CAICeq
+	if use64 {
+		switch cond.Op {
+		case OpLess:     op = CAIClt64
+		case OpLessEq:   op = CAICle64
+		case OpEqual:    op = CAICeq64
+		case OpNotEqual: op = CAICne64
+		case OpGreater:  op = CAICgt64
+		case OpGreaterEq: op = CAICge64
+		default:         op = CAICeq64
+		}
+	} else {
+		switch cond.Op {
+		case OpLess:     op = CAIClt
+		case OpLessEq:   op = CAICle
+		case OpEqual:    op = CAICeq
+		case OpNotEqual: op = CAICne
+		case OpGreater:  op = CAICgt
+		case OpGreaterEq: op = CAICge
+		default:         op = CAICeq
+		}
 	}
 	c.emit("%s%s    %s %s %s", indent, op, dst, left, right)
 	return dst
 }
 
-// loadStrVal は変数名または数値リテラルをCAI値として返す
 func (c *CAIGen) loadStrVal(s string, indent string) string {
 	if len(s) > 0 && (s[0] >= '0' && s[0] <= '9' || s[0] == '-') {
 		return s
 	}
+	typeName := c.varTypes[s]
 	dst := c.tmp()
-	c.emit("%s%s   %s %%%s.ptr", indent, CAILoad, dst, s)
+	c.emitLoad(indent, dst, s, typeName)
 	return dst
 }
 
@@ -424,9 +499,17 @@ func (c *CAIGen) genExpr(node ast.Node, indent string) string {
 	switch n := node.(type) {
 	case *ast.LiteralNode:
 		if n.Kind == KindIdent {
+			typeName := c.varTypes[n.Value]
 			dst := c.tmp()
-			c.emit("%s%s   %s %%%s.ptr", indent, CAILoad, dst, n.Value)
+			c.emitLoad(indent, dst, n.Value, typeName)
 			return dst
+		}
+		if n.Kind == KindString {
+			// 文字列リテラルをインラインで使う場合（dataラベル生成）
+			label := fmt.Sprintf("$strlit_%d", c.tmpIdx)
+			c.tmpIdx++
+			c.emit("%s%s %s \"%s\"", indent, CAIData, label, n.Value)
+			return label
 		}
 		return n.Value
 
@@ -434,16 +517,39 @@ func (c *CAIGen) genExpr(node ast.Node, indent string) string {
 		left := c.genExprLoad(n.Left, indent)
 		right := c.genExprLoad(n.Right, indent)
 		dst := c.tmp()
+		// 型に応じてi32/i64/f32演算を選択
+		typeName := n.Type
+		if typeName == "" {
+			// 左辺から型を推論
+			if lit, ok := n.Left.(*ast.LiteralNode); ok && lit.Kind == KindIdent {
+				typeName = c.varTypes[lit.Value]
+			}
+		}
 		var op string
-		switch n.Op {
-		case OpAdd:
-			op = CAIAdd
-		case OpSub:
-			op = CAISub
-		case OpMul:
-			op = CAIMul
-		case OpDiv:
-			op = CAIDiv
+		if isFloat(typeName) {
+			switch n.Op {
+			case OpAdd: op = CAIAddF
+			case OpSub: op = CAISubF
+			case OpMul: op = CAIMulF
+			case OpDiv: op = CAIDivF
+			default:    op = CAIAddF
+			}
+		} else if isPtr64(typeName) {
+			switch n.Op {
+			case OpAdd: op = CAIAdd64
+			case OpSub: op = CAISub64
+			case OpMul: op = CAIMul64
+			case OpDiv: op = CAIDiv64
+			default:    op = CAIAdd64
+			}
+		} else {
+			switch n.Op {
+			case OpAdd: op = CAIAdd
+			case OpSub: op = CAISub
+			case OpMul: op = CAIMul
+			case OpDiv: op = CAIDiv
+			default:    op = CAIAdd
+			}
 		}
 		c.emit("%s%s    %s %s %s", indent, op, dst, left, right)
 		return dst
@@ -458,28 +564,41 @@ func (c *CAIGen) genExpr(node ast.Node, indent string) string {
 		src := c.genExprLoad(n.Value, indent)
 		dst := c.tmp()
 		if n.Type == "float" {
-			c.emit("%s%s   %s %s", indent, CAIItof, dst, src)
+			// i32 → f32
+			c.emit("%s%s  %s %s", indent, CAIItof2, dst, src)
 		} else {
-			c.emit("%s%s   %s %s", indent, CAIFtoi, dst, src)
+			// f32 → i32
+			c.emit("%s%s  %s %s", indent, CAIFtoi2, dst, src)
 		}
 		return dst
 
 	case *ast.AddressNode:
+		// addr{x} → %x.ptrのアドレスをポインタとして返す
 		dst := c.tmp()
 		c.emit("%s%s    %s %%%s.ptr", indent, CAIMov, dst, n.Name)
 		return dst
 
 	case *ast.DerefNode:
-		ptr := c.tmp()
-		c.emit("%s%s  %s %%%s.ptr", indent, CAILoadP, ptr, n.Name)
+		// deref{ptr} → ptrが指す先の値を読む
+		// ptrはポインタ変数なので loadp2 で64bitアドレスを読み、
+		// さらに load で値を読む
+		ptrVal := c.tmp()
+		c.emit("%s%s  %s %%%s.ptr", indent, CAILoadP2, ptrVal, n.Name)
 		dst := c.tmp()
-		c.emit("%s%s   %s %s", indent, CAILoad, dst, ptr)
+		c.emit("%s%s   %s %s", indent, CAILoad, dst, ptrVal)
 		return dst
 
 	case *ast.IndexNode:
 		idx := c.genExprLoad(n.Index, indent)
 		dst := c.tmp()
-		c.emit("%s%s   %s %%%s.ptr[%s]", indent, CAILoad, dst, n.Name, idx)
+		// 配列アクセス: base + idx*4 のアドレスから loadb or load
+		base := c.tmp()
+		c.emit("%s%s  %s %%%s.ptr", indent, CAILoadP2, base, n.Name)
+		offset := c.tmp()
+		c.emit("%s%s    %s %s 4", indent, CAIMul, offset, idx)
+		addr := c.tmp()
+		c.emit("%s%s   %s %s %s", indent, CAIAddP, addr, base, offset)
+		c.emit("%s%s   %s %s", indent, CAILoad, dst, addr)
 		return dst
 	}
 	return "0"
