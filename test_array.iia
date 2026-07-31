@@ -1,0 +1,16 @@
+# 配列テスト
+# arr[0]=10, arr[1]=20, arr[2]=30 を書き込んで
+# arr[0]+arr[1]+arr[2] = 60 を返す
+
+Function_public[main{
+  receive{},
+  Variable[let{Array_int(arr:10)}],
+  Mutation[array{int(arr:0:10)}],
+  Mutation[array{int(arr:1:20)}],
+  Mutation[array{int(arr:2:30)}],
+  Variable[let{int(a:index{arr(0)})}],
+  Variable[let{int(b:index{arr(1)})}],
+  Variable[let{int(c:index{arr(2)})}],
+  Variable[let{int(result:+{int(+{int(a:b)}:c)})}],
+  return(result)
+}]

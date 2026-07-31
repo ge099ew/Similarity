@@ -9,6 +9,7 @@ import (
 	"math"
 	"similarity/ast"
 	"strconv"
+	"strings"
 )
 
 // ===== エラー型 =====
@@ -158,6 +159,9 @@ func (c *Checker) checkNode(node ast.Node) TypeInfo {
 		return c.checkVariable(n)
 	case *ast.MutationNode:
 		return c.checkMutation(n)
+	case *ast.ArrayStoreNode:
+		// 配列要素書き込みはチェックをパス
+		return TypeInfo{Kind: KindUnknown}
 	case *ast.IfNode:
 		return c.checkIf(n)
 	case *ast.LoopNode:
@@ -263,6 +267,12 @@ func (c *Checker) checkFunc(fn *ast.FuncNode) TypeInfo {
 
 func (c *Checker) checkVariable(v *ast.VariableNode) TypeInfo {
 	declType := typeFromString(v.Type)
+
+	// 配列宣言はサイズのみ持つのでValueの型チェックをスキップ
+	if strings.HasPrefix(v.Type, "Array_") {
+		c.vars[v.Name] = declType
+		return declType
+	}
 
 	// 値が存在する場合、型整合性チェック
 	if v.Value != nil {

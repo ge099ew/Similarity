@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"similarity/ast"
 	"similarity/stdlib"
+	"strconv"
 	"strings"
 )
 
@@ -39,6 +40,7 @@ const (
 	CAILoad    = "load"
 	CAIStoreP  = "storep"
 	CAILoadP2  = "loadp2"
+	CAIAddra   = "addra"  // スタック配列の先頭アドレス取得(lea)
 	CAIAddP    = "addp"
 	CAILoadB   = "loadb"
 	CAIStoreB  = "storeb"
@@ -108,6 +110,13 @@ var typeSizes = map[string]int{
 func sizeOf(typeName string) int {
 	if s, ok := typeSizes[typeName]; ok {
 		return s
+	}
+	// Array_int(N) 形式 — ここではelemサイズのみ返す（alloc時はN*elemSize）
+	if strings.HasPrefix(typeName, "Array_") {
+		elem := strings.TrimPrefix(typeName, "Array_")
+		if s, ok := typeSizes[elem]; ok {
+			return s
+		}
 	}
 	return 4
 }
@@ -299,6 +308,22 @@ func (c *CAIGen) genStmt(node ast.Node, indent string) {
 		if n.Type == "__struct__" {
 			return
 		}
+		// 配列宣言: Variable[let{Array_int(arr:N)}]
+		if strings.HasPrefix(n.Type, "Array_") {
+			elemType := strings.TrimPrefix(n.Type, "Array_")
+			elemSize := sizeOf(elemType)
+			size := 0
+			if lit, ok := n.Value.(*ast.LiteralNode); ok {
+				size, _ = strconv.Atoi(lit.Value)
+			}
+			totalSize := size * elemSize
+			if totalSize == 0 {
+				totalSize = elemSize // フォールバック
+			}
+			c.varTypes[n.Name] = n.Type
+			c.emit("%s%s  %%%s.ptr %d", indent, CAIAlloc, n.Name, totalSize)
+			return
+		}
 		// 文字列リテラルはdataラベルとして.rodataに配置
 		if lit, ok := n.Value.(*ast.LiteralNode); ok && lit.Kind == KindString {
 			label := fmt.Sprintf("$str_%s_%d", n.Name, c.tmpIdx)
@@ -317,6 +342,20 @@ func (c *CAIGen) genStmt(node ast.Node, indent string) {
 			val := c.genExpr(n.Value, indent)
 			c.emitStore(indent, n.Name, val, n.Type)
 		}
+
+	case *ast.ArrayStoreNode:
+		// Mutation[array{int(arr:i:val)}]
+		// addr = base + idx * elemSize
+		idx := c.genExprLoad(n.Index, indent)
+		val := c.genExprLoad(n.Value, indent)
+		base := c.tmp()
+		c.emit("%s%s  %s %%%s.ptr", indent, CAIAddra, base, n.Name)
+		elemSize := sizeOf(n.ElemType)
+		offset := c.tmp()
+		c.emit("%s%s    %s %s %d", indent, CAIMul, offset, idx, elemSize)
+		addr := c.tmp()
+		c.emit("%s%s   %s %s %s", indent, CAIAddP, addr, base, offset)
+		c.emit("%sstorei  %s %s", indent, addr, val)
 
 	case *ast.MutationNode:
 		if n.Value != nil {
@@ -621,14 +660,21 @@ func (c *CAIGen) genExpr(node ast.Node, indent string) string {
 	case *ast.IndexNode:
 		idx := c.genExprLoad(n.Index, indent)
 		dst := c.tmp()
-		// 配列アクセス: base + idx*4 のアドレスから loadb or load
+		// 配列アクセス: base + idx*elemSize のアドレスから loadi
 		base := c.tmp()
-		c.emit("%s%s  %s %%%s.ptr", indent, CAILoadP2, base, n.Name)
+		c.emit("%s%s  %s %%%s.ptr", indent, CAIAddra, base, n.Name)
+		// varTypesからelemSizeを取得（Array_int→4など）
+		arrType := c.varTypes[n.Name]
+		elemType := strings.TrimPrefix(arrType, "Array_")
+		elemSize := sizeOf(elemType)
+		if elemSize == 0 {
+			elemSize = 4
+		}
 		offset := c.tmp()
-		c.emit("%s%s    %s %s 4", indent, CAIMul, offset, idx)
+		c.emit("%s%s    %s %s %d", indent, CAIMul, offset, idx, elemSize)
 		addr := c.tmp()
 		c.emit("%s%s   %s %s %s", indent, CAIAddP, addr, base, offset)
-		c.emit("%s%s   %s %s", indent, CAILoad, dst, addr)
+		c.emit("%sloadi   %s %s", indent, dst, addr)
 		return dst
 	}
 	return "0"

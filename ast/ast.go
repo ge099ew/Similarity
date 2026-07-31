@@ -334,3 +334,32 @@ type StructInstanceNode struct {
 
 func (s *StructInstanceNode) TokenLiteral() string { return "StructInstance" }
 func (s *StructInstanceNode) Position() Pos        { return s.Pos }
+
+// ===== 配列 =====
+
+// ArrayNode: 配列宣言
+// Variable[let{Array_int(arr:N)}]
+// Size=0 は動的サイズ（未対応、将来用）
+type ArrayNode struct {
+	ElemType string // int / float / bool
+	Name     string
+	Size     int  // 要素数
+	Mutable  bool // let=true, unclet=false
+	Pos      Pos
+}
+
+func (a *ArrayNode) TokenLiteral() string { return "Array" }
+func (a *ArrayNode) Position() Pos        { return a.Pos }
+
+// ArrayStoreNode: 配列要素書き込み
+// Mutation[array{int(arr:i:val)}]
+type ArrayStoreNode struct {
+	ElemType string // int / float / bool
+	Name     string // 配列名
+	Index    Node   // インデックス
+	Value    Node   // 書き込む値
+	Pos      Pos
+}
+
+func (a *ArrayStoreNode) TokenLiteral() string { return "array" }
+func (a *ArrayStoreNode) Position() Pos        { return a.Pos }

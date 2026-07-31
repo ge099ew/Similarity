@@ -49,6 +49,8 @@ static uint64_t align_up(uint64_t value, uint64_t alignment){
 /* ===== 命令種別 ===== */
 typedef enum {
     OP_ALLOC, OP_STORE, OP_LOAD,
+    OP_STOREI, /* storei %ptr %val — [ptr]が指す32bitメモリへ書き込む */
+    OP_LOADI,  /* loadi  %dst %ptr — [ptr]が指す32bitメモリから読み込む */
     OP_ADD, OP_SUB, OP_MUL, OP_DIV,
     OP_CLT, OP_CLE, OP_CEQ, OP_CNE, OP_CGT, OP_CGE,
     OP_LABEL, OP_JMP, OP_JNZ,
@@ -63,6 +65,7 @@ typedef enum {
     OP_STOREP,  /* storep %ptr %val      — 8バイト(64bit)をストア */
     OP_LOADP2,  /* loadp2 %dst %ptr      — 8バイト(64bit)をロード（loadpはCAI既存名と競合回避） */
     /* ===== i64演算 ===== */
+    OP_ADDRA,   /* addra %dst %arr.ptr — スタック上の配列の先頭アドレスをdstに格納(lea) */
     OP_ADD64,   /* add64 %dst %a %b  — 64bit加算 */
     OP_SUB64,   /* sub64 %dst %a %b  — 64bit減算 */
     OP_MUL64,   /* mul64 %dst %a %b  — 64bit乗算 */
@@ -102,8 +105,8 @@ typedef struct {
 } FuncInfo;
 
 /* ===== レジスタ割り当て ===== */
-#define NUM_ALLOC_REGS 5
-static const int alloc_phys[NUM_ALLOC_REGS] = {3, 12, 13, 14, 15};
+#define NUM_ALLOC_REGS 1
+static const int alloc_phys[NUM_ALLOC_REGS] = {3}; /* rbx のみ（ランタイムがpush/pop済み）*/
 
 typedef struct {
     char name[MAX_NAME];
@@ -575,6 +578,18 @@ static void parse_line(CaiContext *c, char *line){
         ins->kind=OP_STOREB;
         NEXT; if(tok) strncpy(ins->dst,tok,MAX_NAME-1);
         NEXT; if(tok) strncpy(ins->a,tok,MAX_NAME-1);
+    } else if(!strcmp(tok,"storei")){
+        ins->kind=OP_STOREI;
+        NEXT; if(tok) strncpy(ins->dst,tok,MAX_NAME-1); /* ptr */
+        NEXT; if(tok) strncpy(ins->a,tok,MAX_NAME-1);   /* val */
+    } else if(!strcmp(tok,"loadi")){
+        ins->kind=OP_LOADI;
+        NEXT; if(tok) strncpy(ins->dst,tok,MAX_NAME-1); /* dst */
+        NEXT; if(tok) strncpy(ins->a,tok,MAX_NAME-1);   /* ptr */
+    } else if(!strcmp(tok,"addra")){
+        ins->kind=OP_ADDRA;
+        NEXT; if(tok) strncpy(ins->dst,tok,MAX_NAME-1); /* dst */
+        NEXT; if(tok) strncpy(ins->a,tok,MAX_NAME-1);   /* arr.ptr */
     } else { ins->kind=OP_COMMENT; }
     #undef NEXT
     c->instr_count++;
@@ -617,6 +632,23 @@ static void count_uses(CaiContext *c, int s, int e){
 static void init_regalloc(CaiContext *c, FuncInfo *fn){
     c->vreg_count=0; c->stack_used=0;
     memset(c->reg_used,0,sizeof(c->reg_used));
+
+    /* まずOP_ALLOCを先行処理してサイズ付きスロットを確保 */
+    for(int i=fn->instr_start;i<fn->instr_end;i++){
+        Instr *ins=&c->instrs[i];
+        if(ins->kind!=OP_ALLOC) continue;
+        if(find_vreg(c,ins->dst)>=0) continue;
+        int sz = ins->argc > 8 ? ins->argc : 8;
+        sz = (sz + 7) & ~7;
+        c->stack_used += sz;
+        int idx=c->vreg_count++;
+        c->vregs[idx].stack_off=-c->stack_used;
+        c->vregs[idx].phys_reg=-1;
+        c->vregs[idx].use_count=0;
+        c->vregs[idx].is_ptr=strstr(ins->dst,".ptr")!=NULL;
+        c->vregs[idx].is_float=0;
+        strncpy(c->vregs[idx].name,ins->dst,MAX_NAME-1);
+    }
 
     for(int i=fn->instr_start;i<fn->instr_end;i++){
         Instr *ins=&c->instrs[i];
@@ -675,6 +707,7 @@ static void init_regalloc(CaiContext *c, FuncInfo *fn){
 
     for(int i=0;i<c->vreg_count;i++){
         if(c->vregs[i].phys_reg>=0) continue;
+        if(c->vregs[i].stack_off!=0) continue; /* OP_ALLOCで既に確保済み */
         c->stack_used+=8; c->vregs[i].stack_off=-c->stack_used;
     }
     for(int i=0;i<6;i++){
@@ -781,7 +814,23 @@ static void gen_func(CaiContext *c, FuncInfo *fn){
         Instr *ins=&c->instrs[i];
         switch(ins->kind){
         case OP_COMMENT: break;
-        case OP_ALLOC: { int idx=find_vreg(c,ins->dst); if(idx<0) alloc_slot(c,ins->dst); break; }
+        case OP_ALLOC: {
+            int idx=find_vreg(c,ins->dst);
+            if(idx<0){
+                /* ins->argc = バイト数。最低8バイト、8バイトアライン */
+                int sz = ins->argc > 8 ? ins->argc : 8;
+                sz = (sz + 7) & ~7; /* 8バイトアライン */
+                c->stack_used += sz;
+                idx = c->vreg_count;
+                c->vregs[idx].stack_off = -c->stack_used;
+                c->vregs[idx].phys_reg = -1;
+                c->vregs[idx].use_count = 0;
+                c->vregs[idx].is_ptr = strstr(ins->dst,".ptr")!=NULL;
+                strncpy(c->vregs[idx].name, ins->dst, MAX_NAME-1);
+                c->vreg_count++;
+            }
+            break;
+        }
 
         case OP_STORE: {
             load_to_eax(c,ins->a);
@@ -1075,29 +1124,22 @@ static void gen_func(CaiContext *c, FuncInfo *fn){
         case OP_ADDP: {
             /* addp %dst %ptr %off
              * 64bitポインタ + 32bitオフセット → 64bitポインタ
-             * 手順:
-             *   1. ptrを64bitでraxにロード
-             *   2. offを32bitでrcxにロード → movsx rcx,ecx で64bit化
-             *   3. add rax, rcx
-             *   4. dstに保存（64bitアドレスとして）
+             * off を先にrcxへロード、その後ptrをraxへロードしてadd
              */
-            /* ptr → rax (64bit) */
-            load_ptr_to_rax(c,ins->a);
-            /* off → rcx (32bit → 64bit符号拡張) */
-            reset_eax(c);
             if(is_imm(ins->b)){
                 int32_t v=atoi(ins->b);
-                if(v==0){
-                    /* add rax,0 は不要 */
-                } else {
-                    /* add rax, imm32 (64bit): 48 05 <imm32> または 48 83 C0 <imm8> */
+                load_ptr_to_rax(c,ins->a);
+                if(v!=0){
                     if(v>=-128&&v<=127){ emit3(c,0x48,0x83,0xC0); emit1(c,(uint8_t)(int8_t)v); }
                     else { emit1(c,0x48); emit1(c,0x05); emit_i32(c,v); }
                 }
             } else {
+                /* offを先にecx(→rcx)へロード、ptrをraxへ */
                 load_to_eax(c,ins->b);
                 /* movsx rcx, eax */
-                emit1(c,0x48); emit1(c,0x63); emit1(c,modrm(3,ECX,EAX));
+                emit3(c,0x48,0x63,modrm(3,ECX,EAX));
+                reset_eax(c);
+                load_ptr_to_rax(c,ins->a);
                 /* add rax, rcx (64bit): 48 01 C8 */
                 emit3(c,0x48,0x01,0xC8);
             }
@@ -1136,6 +1178,59 @@ static void gen_func(CaiContext *c, FuncInfo *fn){
             load_to_eax(c,ins->a);
             /* mov byte ptr [rcx], al: 88 01 */
             emit2(c,0x88,0x01);
+            reset_eax(c);
+            break;
+        }
+
+        case OP_STOREI: {
+            /* storei %ptr %val  —  val(32bit)を[ptr]が指すアドレスへ書き込む */
+            /* ptr(64bit) → rcx */
+            load_ptr_to_rax(c,ins->dst);
+            emit1(c,0x48); emit1(c,0x89); emit1(c,modrm(3,EAX,ECX));
+            reset_eax(c);
+            if(is_imm(ins->a)){
+                /* movl $imm32, [rcx]: C7 01 <imm32> */
+                int32_t v=atoi(ins->a);
+                emit2(c,0xC7,0x01); emit_i32(c,v);
+            } else {
+                load_to_eax(c,ins->a);
+                /* mov dword ptr [rcx], eax: 89 01 */
+                emit2(c,0x89,0x01);
+                reset_eax(c);
+            }
+            break;
+        }
+
+        case OP_LOADI: {
+            /* loadi %dst %ptr
+             * [ptr]が指すメモリアドレスから32bitを読み込む */
+            load_ptr_to_rax(c,ins->a);
+            emit1(c,0x48); emit1(c,0x89); emit1(c,modrm(3,EAX,ECX));
+            reset_eax(c);
+            /* mov eax, [rcx]: 8B 01 */
+            emit2(c,0x8B,0x01);
+            store_eax_to(c,ins->dst);
+            reset_eax(c);
+            break;
+        }
+
+        case OP_ADDRA: {
+            /* addra %dst %arr.ptr
+             * スタック上の配列スロットの先頭アドレスを取得: lea rax, [rbp+off]
+             * loadp2と違い「スロットの値」ではなく「スロット自体のアドレス」を返す */
+            int ai=find_vreg(c,ins->a);
+            if(ai<0){ ai=alloc_slot(c,ins->a); }
+            int off=c->vregs[ai].stack_off;
+            /* lea rax, [rbp+off] */
+            emit1(c,0x48); emit1(c,0x8D); /* REX.W + LEA */
+            if(off>=-128 && off<=127){
+                emit1(c,0x45); emit1(c,(int8_t)off); /* ModRM: [rbp+disp8] */
+            } else {
+                emit1(c,0x85); emit_i32(c,off);      /* ModRM: [rbp+disp32] */
+            }
+            /* rax → dst (64bit) */
+            { int di=find_vreg(c,ins->dst); if(di<0) di=alloc_slot(c,ins->dst);
+              emit_rax_to_slot64(c,di); }
             reset_eax(c);
             break;
         }

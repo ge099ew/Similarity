@@ -5,6 +5,7 @@ import (
 	"similarity/ast"
 	"similarity/lexer"
 	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -219,10 +220,36 @@ func (p *Parser) parseExplanation() *ast.ExplanationNode {
 }
 
 // Mutation[variable{int(x:30)}]
-func (p *Parser) parseMutation() *ast.MutationNode {
+// Mutation[array{int(arr:i:val)}]
+func (p *Parser) parseMutation() ast.Node {
 	pos := p.curPos()
-	p.advance() // skip Mutation  ← 先にこれ
+	p.advance() // skip Mutation
 	p.expect(lexer.TOKEN_LBRACKET)
+
+	// array書き込み: Mutation[array{int(arr:i:val)}]
+	if p.cur().Type == lexer.TOKEN_ARRAY {
+		p.advance() // skip array
+		p.expect(lexer.TOKEN_LBRACE)
+		elemType := p.cur().Literal
+		p.advance()
+		p.expect(lexer.TOKEN_LPAREN)
+		arrName := p.cur().Literal
+		p.advance()
+		p.expect(lexer.TOKEN_COLON)
+		idx := p.parseLiteral()
+		p.expect(lexer.TOKEN_COLON)
+		val := p.parseLiteral()
+		p.expect(lexer.TOKEN_RPAREN)
+		p.expect(lexer.TOKEN_RBRACE)
+		p.expect(lexer.TOKEN_RBRACKET)
+		return &ast.ArrayStoreNode{
+			ElemType: elemType,
+			Name:     arrName,
+			Index:    idx,
+			Value:    val,
+			Pos:      pos,
+		}
+	}
 
 	// variable をスキップ
 	if p.cur().Type == lexer.TOKEN_IDENT ||
@@ -265,6 +292,27 @@ func (p *Parser) parseVariable() *ast.VariableNode {
 	// 型名を読む
 	typeName := p.cur().Literal
 	p.advance()
+
+	// 配列宣言: Variable[let{Array_int(arr:N)}]
+	if strings.HasPrefix(typeName, "Array_") {
+		_ = strings.TrimPrefix(typeName, "Array_") // 型情報はcaigenで使用
+		p.expect(lexer.TOKEN_LPAREN)
+		arrName := p.cur().Literal
+		p.advance()
+		p.expect(lexer.TOKEN_COLON)
+		sizeVal, _ := strconv.Atoi(p.cur().Literal)
+		p.advance()
+		p.expect(lexer.TOKEN_RPAREN)
+		p.expect(lexer.TOKEN_RBRACE)
+		p.expect(lexer.TOKEN_RBRACKET)
+		return p.arena.Add(&ast.VariableNode{
+			Mutable: mutable,
+			Type:    typeName,
+			Name:    arrName,
+			Value:   &ast.LiteralNode{Kind: "INT_LIT", Value: strconv.Itoa(sizeVal)},
+			Pos:     pos,
+		}).(*ast.VariableNode)
+	}
 
 	p.expect(lexer.TOKEN_LPAREN)
 	varName := p.cur().Literal
