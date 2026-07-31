@@ -1,0 +1,18 @@
+Explanation[Application{Benchmark(type:stress_call)}]
+
+Function[inc{
+  receive{int(x)},
+  return(+{int(x:1)})
+}]
+
+Function_public[main{
+  receive{},
+  Variable[let{int(v:0)}],
+  Variable[let{int(i:0)}],
+  Loop[for{int(i:0), less(i:1000000), step{1}},
+    Body[
+      Mutation[variable{int(v:call{inc(v)})}]
+    ]
+  ],
+  return(v)
+}]

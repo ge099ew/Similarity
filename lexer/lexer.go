@@ -325,6 +325,10 @@ func (l *Lexer) skipWhitespaceAndComments() {
 			for l.pos < len(l.input) && l.input[l.pos] != '\n' {
 				l.pos++
 			}
+		} else if ch == '#' {
+			for l.pos < len(l.input) && l.input[l.pos] != '\n' {
+				l.pos++
+			}
 		} else {
 			break
 		}

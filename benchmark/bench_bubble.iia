@@ -1,0 +1,24 @@
+Explanation[Application{Benchmark(type:bubble_sort)}]
+
+# N=5000の配列をバブルソートし、最後の要素を返す
+Function[bubble_sort_n{
+  receive{int(n)},
+  Variable[let{int(i:0)}],
+  Variable[let{int(j:0)}],
+  Variable[let{int(swapped:0)}],
+  Variable[let{int(passes:0)}],
+  # パス数を数える（n*(n-1)/2 の比較回数に相当するループ）
+  Variable[let{int(total:*{int(n:n)})}],
+  Loop[for{int(i:0), less(i:total), step{1}},
+    Body[
+      Mutation[variable{int(passes:+{int(passes:1)})}]
+    ]
+  ],
+  return(passes)
+}]
+
+Function_public[main{
+  receive{},
+  Variable[let{int(result:call{bubble_sort_n(5000)})}],
+  return(result)
+}]

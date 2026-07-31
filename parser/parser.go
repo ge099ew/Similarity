@@ -411,12 +411,17 @@ func (p *Parser) parseLoop() *ast.LoopNode {
 		// lt(i,10)
 		node.Condition = p.parseCondition()
 		p.expect(lexer.TOKEN_COMMA)
-		// step{1}
+		// step{1} or step{-1}
 		p.expect(lexer.TOKEN_STEP)
 		p.expect(lexer.TOKEN_LBRACE)
+		sign := 1
+		if p.cur().Type == lexer.TOKEN_MINUS {
+			sign = -1
+			p.advance()
+		}
 		stepVal, _ := strconv.Atoi(p.cur().Literal)
 		p.advance()
-		node.Step = stepVal
+		node.Step = sign * stepVal
 		p.expect(lexer.TOKEN_RBRACE)
 		p.expect(lexer.TOKEN_RBRACE)
 	} else if p.cur().Type == lexer.TOKEN_COUNT {

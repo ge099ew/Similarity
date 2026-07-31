@@ -135,12 +135,13 @@ func newStructInfo(fields []ast.StructField) StructInfo {
 // ===== CAIGen =====
 
 type CAIGen struct {
-	out      strings.Builder
-	tmpIdx   int
-	labelIdx int
-	structs  map[string]StructInfo
-	// varTypes: 変数名 → 型名（store/load命令の選択に使う）
-	varTypes map[string]string
+	out           strings.Builder
+	tmpIdx        int
+	labelIdx      int
+	structs       map[string]StructInfo
+	varTypes      map[string]string
+	breakLabel    string // 現在のループのbreak先
+	continueLabel string // 現在のループのcontinue先
 }
 
 func New() *CAIGen {
@@ -361,10 +362,14 @@ func (c *CAIGen) genStmt(node ast.Node, indent string) {
 		}
 
 	case *ast.BreakNode:
-		c.emit("%s%s    __break__", indent, CAIJmp)
+		if c.breakLabel != "" {
+			c.emit("%s%s    %s", indent, CAIJmp, c.breakLabel)
+		}
 
 	case *ast.ContinueNode:
-		c.emit("%s%s    __continue__", indent, CAIJmp)
+		if c.continueLabel != "" {
+			c.emit("%s%s    %s", indent, CAIJmp, c.continueLabel)
+		}
 	}
 }
 
@@ -399,6 +404,12 @@ func (c *CAIGen) genLoop(n *ast.LoopNode, indent string) {
 	lBody := c.label()
 	lEnd := c.label()
 
+	// break/continueラベルをスタック的に保存
+	savedBreak := c.breakLabel
+	savedContinue := c.continueLabel
+	c.breakLabel = lEnd
+	c.continueLabel = lStart
+
 	if n.Init != nil {
 		c.genStmt(n.Init, indent)
 	}
@@ -421,13 +432,22 @@ func (c *CAIGen) genLoop(n *ast.LoopNode, indent string) {
 				dst := c.tmp()
 				t := c.tmp()
 				typeName := c.varTypes[v.Name]
+				step := n.Step
 				if isPtr64(typeName) {
 					c.emit("%s%s  %s %%%s.ptr", indent, CAILoadP2, dst, v.Name)
-					c.emit("%s%s  %s %s %d", indent, CAIAdd64, t, dst, n.Step)
+					if step >= 0 {
+						c.emit("%s%s  %s %s %d", indent, CAIAdd64, t, dst, step)
+					} else {
+						c.emit("%s%s  %s %s %d", indent, CAISub64, t, dst, -step)
+					}
 					c.emit("%s%s  %%%s.ptr %s", indent, CAIStoreP, v.Name, t)
 				} else {
 					c.emit("%s%s   %s %%%s.ptr", indent, CAILoad, dst, v.Name)
-					c.emit("%s%s    %s %s %d", indent, CAIAdd, t, dst, n.Step)
+					if step >= 0 {
+						c.emit("%s%s    %s %s %d", indent, CAIAdd, t, dst, step)
+					} else {
+						c.emit("%s%s    %s %s %d", indent, CAISub, t, dst, -step)
+					}
 					c.emit("%s%s  %%%s.ptr %s", indent, CAIStore, v.Name, t)
 				}
 			}
@@ -436,6 +456,10 @@ func (c *CAIGen) genLoop(n *ast.LoopNode, indent string) {
 
 	c.emit("%s%s    %s", indent, CAIJmp, lStart)
 	c.emit("%s%s  %s", indent, CAILabel, lEnd)
+
+	// break/continueラベルを復元
+	c.breakLabel = savedBreak
+	c.continueLabel = savedContinue
 }
 
 // ===== 条件生成 =====
@@ -481,7 +505,13 @@ func (c *CAIGen) genCond(node ast.Node, indent string) string {
 }
 
 func (c *CAIGen) loadStrVal(s string, indent string) string {
-	if len(s) > 0 && (s[0] >= '0' && s[0] <= '9' || s[0] == '-') {
+	if len(s) == 0 {
+		return "0"
+	}
+	// 数値リテラル（先頭が数字 or マイナス、かつ変数として登録されていない）
+	isNum := s[0] >= '0' && s[0] <= '9'
+	isNeg := s[0] == '-' && len(s) > 1
+	if (isNum || isNeg) && c.varTypes[s] == "" {
 		return s
 	}
 	typeName := c.varTypes[s]

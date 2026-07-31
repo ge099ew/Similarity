@@ -1,0 +1,30 @@
+Explanation[Application{Benchmark(type:ackermann)}]
+
+Function[ackermann{
+  receive{int(m), int(n)},
+  If[check{equal(m:0)},
+    True[return(+{int(n:1)})],
+    False[
+      If[check{equal(n:0)},
+        True[
+          Variable[let{int(m1:-{int(m:1)})}],
+          Variable[let{int(r:call{ackermann(m1, 1)})}],
+          return(r)
+        ],
+        False[
+          Variable[let{int(n1:-{int(n:1)})}],
+          Variable[let{int(inner:call{ackermann(m, n1)})}],
+          Variable[let{int(m1:-{int(m:1)})}],
+          Variable[let{int(r:call{ackermann(m1, inner)})}],
+          return(r)
+        ]
+      ]
+    ]
+  ]
+}]
+
+Function_public[main{
+  receive{},
+  Variable[let{int(result:call{ackermann(3, 7)})}],
+  return(result)
+}]
