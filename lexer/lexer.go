@@ -58,6 +58,8 @@ const (
 	TOKEN_CONTINUE TokenType = "CONTINUE"
 	TOKEN_STRUCT   TokenType = "STRUCT"
 	TOKEN_ARRAY    TokenType = "ARRAY"
+	TOKEN_INC      TokenType = "INC"
+	TOKEN_DEC      TokenType = "DEC"
 
 	TOKEN_LBRACKET TokenType = "["
 	TOKEN_RBRACKET TokenType = "]"
@@ -221,9 +223,17 @@ func (l *Lexer) nextToken() Token {
 		l.pos++
 		return Token{TOKEN_SEMI, ";", l.line, c}
 	case '+':
+		if l.pos+1 < len(l.input) && l.input[l.pos+1] == '+' {
+			l.pos += 2
+			return Token{TOKEN_INC, "++", l.line, c}
+		}
 		l.pos++
 		return Token{TOKEN_PLUS, "+", l.line, c}
 	case '-':
+		if l.pos+1 < len(l.input) && l.input[l.pos+1] == '-' {
+			l.pos += 2
+			return Token{TOKEN_DEC, "--", l.line, c}
+		}
 		l.pos++
 		return Token{TOKEN_MINUS, "-", l.line, c}
 	case '*':

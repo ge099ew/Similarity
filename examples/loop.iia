@@ -1,12 +1,14 @@
 # Loop の例（カウントダウン）
 
 Function_public[main{
-  Variable[let{int(i:10)}]
-  Variable[let{int(sum:0)}]
-  Loop[for{int(i:10), greater(i:0), step{-1}},
-    Body[
-      Mutation[variable{int(sum:+{int(sum:i)})}]
-    ]
-  ]
+  Variable[let{int(i:10)}],
+  Variable[let{int(sum:0)}],
+  Loop[
+    check{greater(i:0)},
+    for{
+      Mutation[variable{int(sum:+{int(sum,i)})}],
+      --{i}
+    }
+  ],
   return(sum)
 }]

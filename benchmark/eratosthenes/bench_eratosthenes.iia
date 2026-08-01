@@ -1,0 +1,48 @@
+Explanation[Application{Benchmark(type:primes)}]
+
+# 試し割り法で 2..N の素数を数える
+
+Function[is_prime{
+  receive{int(n)},
+  If[check{lesseq(n:1)},
+    True{return(0)},
+    False{}
+  ],
+  Variable[let{int(i:2)}],
+  Loop[
+    check{lesseq(i:n)},
+    for{
+      Variable[let{int(q:/{int(n,i)})}],
+      Variable[let{int(r:-{int(n,*{int(q,i)})})}],
+      If[check{equal(r:0)},
+        True{
+          If[check{notequal(i:n)},
+            True{return(0)},
+            False{}
+          ]
+        },
+        False{}
+      ],
+      ++{i}
+    }
+  ],
+  return(1)
+}]
+
+Function_public[main{
+  receive{},
+  Variable[let{int(count:0)}],
+  Variable[let{int(i:2)}],
+  Loop[
+    check{lesseq(i:10000)},
+    for{
+      Variable[let{int(p:call{is_prime(i)})}],
+      If[check{equal(p:1)},
+        True{Mutation[variable{int(count:+{int(count,1)})}]},
+        False{}
+      ],
+      ++{i}
+    }
+  ],
+  return(count)
+}]

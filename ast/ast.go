@@ -363,3 +363,14 @@ type ArrayStoreNode struct {
 
 func (a *ArrayStoreNode) TokenLiteral() string { return "array" }
 func (a *ArrayStoreNode) Position() Pos        { return a.Pos }
+
+// IncrNode: インクリメント/デクリメント
+// ++{i} / --{i}
+type IncrNode struct {
+	Name string
+	Op   string // "++" or "--"
+	Pos  Pos
+}
+
+func (n *IncrNode) TokenLiteral() string { return n.Op }
+func (n *IncrNode) Position() Pos        { return n.Pos }

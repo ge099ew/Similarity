@@ -3,8 +3,13 @@ Explanation[Application{Benchmark(type:sumloop)}]
 Function_public[main{
   receive{},
   Variable[let{int(sum:0)}],
-  Loop[for{int(i:0), lt(i,100000000), step{1}},
-    Body[Variable[let{int(sum:+{int(sum:i)})}]]
+  Loop[
+    check{lt(i,100000000)},
+    for{
+      Variable[let{int(i:0)}],
+Variable[let{int(sum:+{int(sum,i)})}],
+      ++{i}
+    }
   ],
   return{sum}
 }]

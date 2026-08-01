@@ -4,7 +4,7 @@ Function_public[main{
   Variable[let{int(x:7)}]
   Variable[let{float(fx:cast{float(x)})}]
   Variable[let{float(fy:3.5)}]
-  Variable[let{float(fz:+{float(fx:fy)})}]
+  Variable[let{float(fz:+{float(fx,fy)})}]
   Variable[let{int(result:cast{int(fz)})}]
   return(result)
 }]

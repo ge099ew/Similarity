@@ -3,7 +3,7 @@ Import[math{}]
 
 Function[main{
     Variable[let{int(a:42)}],
-    Variable[let{int(b:-{int(0:7)})}],
+    Variable[let{int(b:-{int(0,7)})}],
     Variable[let{int(c:0)}],
     call{print_int(a)},
     call{newline()},

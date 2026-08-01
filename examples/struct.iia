@@ -4,7 +4,7 @@ Variable[struct{Point:int(x), int(y)}]
 
 Function[distance_sq{
   receive{int(px), int(py)},
-  Variable[let{int(sq:+{int(*{int(px:px)}:*{int(py:py)})})}]
+  Variable[let{int(sq:+{int(*{int(px,px)},*{int(py,py)})}})}]
   return(sq)
 }]
 

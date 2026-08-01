@@ -400,6 +400,20 @@ func (c *CAIGen) genStmt(node ast.Node, indent string) {
 			c.genStmt(s, indent)
 		}
 
+	case *ast.IncrNode:
+		// ++{i} → load i, add 1, store i
+		// --{i} → load i, sub 1, store i
+		typeName := c.varTypes[n.Name]
+		dst := c.tmp()
+		c.emitLoad(indent, dst, n.Name, typeName)
+		result := c.tmp()
+		if n.Op == "++" {
+			c.emit("%s%s    %s %s 1", indent, CAIAdd, result, dst)
+		} else {
+			c.emit("%s%s    %s %s 1", indent, CAISub, result, dst)
+		}
+		c.emitStore(indent, n.Name, result, typeName)
+
 	case *ast.BreakNode:
 		if c.breakLabel != "" {
 			c.emit("%s%s    %s", indent, CAIJmp, c.breakLabel)

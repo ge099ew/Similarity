@@ -162,6 +162,8 @@ func (c *Checker) checkNode(node ast.Node) TypeInfo {
 	case *ast.ArrayStoreNode:
 		// 配列要素書き込みはチェックをパス
 		return TypeInfo{Kind: KindUnknown}
+	case *ast.IncrNode:
+		return TypeInfo{Kind: KindInt}
 	case *ast.IfNode:
 		return c.checkIf(n)
 	case *ast.LoopNode:

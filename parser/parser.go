@@ -167,6 +167,8 @@ func (p *Parser) parseStatement() ast.Node {
 		return p.parseBreak()
 	case lexer.TOKEN_CONTINUE:
 		return p.parseContinue()
+	case lexer.TOKEN_INC, lexer.TOKEN_DEC:
+		return p.parseIncr()
 	case lexer.TOKEN_CAST:
 		return p.parseCast()
 	case lexer.TOKEN_INDEX:
@@ -420,71 +422,50 @@ func (p *Parser) parseIf() *ast.IfNode {
 	p.expect(lexer.TOKEN_RBRACE)
 	p.expect(lexer.TOKEN_COMMA)
 
-	// True[...]
+	// True{...}
 	p.expect(lexer.TOKEN_TRUE)
-	p.expect(lexer.TOKEN_LBRACKET)
+	p.expect(lexer.TOKEN_LBRACE)
 	node.True = p.parseBlock()
-	p.expect(lexer.TOKEN_RBRACKET)
+	p.expect(lexer.TOKEN_RBRACE)
 
-	// False[...] (任意)
+	// False{...} (任意)
 	if p.cur().Type == lexer.TOKEN_COMMA {
 		p.advance()
 	}
 	if p.cur().Type == lexer.TOKEN_FALSE {
 		p.advance()
-		p.expect(lexer.TOKEN_LBRACKET)
+		p.expect(lexer.TOKEN_LBRACE)
 		node.False = p.parseBlock()
-		p.expect(lexer.TOKEN_RBRACKET)
+		p.expect(lexer.TOKEN_RBRACE)
 	}
 
 	p.expect(lexer.TOKEN_RBRACKET)
 	return node
 }
 
-// Loop[for{int(i:0),lt(i,10),step{1}}, Body[...]]
-// Loop[Count{int(i:10)}, Body[...]]
+// Loop[check{less(i,10)}, for{...}]
 func (p *Parser) parseLoop() *ast.LoopNode {
 	pos := p.curPos()
 	p.advance() // skip Loop
 	p.expect(lexer.TOKEN_LBRACKET)
 
 	node := p.arena.Add(&ast.LoopNode{Pos: pos}).(*ast.LoopNode)
-	if p.cur().Type == lexer.TOKEN_FOR {
-		node.Kind = "for"
-		p.advance()
-		p.expect(lexer.TOKEN_LBRACE)
-		// int(i:0)
-		node.Init = p.parseTypedValue()
-		p.expect(lexer.TOKEN_COMMA)
-		// lt(i,10)
-		node.Condition = p.parseCondition()
-		p.expect(lexer.TOKEN_COMMA)
-		// step{1} or step{-1}
-		p.expect(lexer.TOKEN_STEP)
-		p.expect(lexer.TOKEN_LBRACE)
-		sign := 1
-		if p.cur().Type == lexer.TOKEN_MINUS {
-			sign = -1
-			p.advance()
-		}
-		stepVal, _ := strconv.Atoi(p.cur().Literal)
-		p.advance()
-		node.Step = sign * stepVal
-		p.expect(lexer.TOKEN_RBRACE)
-		p.expect(lexer.TOKEN_RBRACE)
-	} else if p.cur().Type == lexer.TOKEN_COUNT {
-		node.Kind = "count"
-		p.advance()
-		p.expect(lexer.TOKEN_LBRACE)
-		node.Init = p.parseTypedValue()
-		p.expect(lexer.TOKEN_RBRACE)
-	}
+	node.Kind = "for"
+
+	// check{条件}
+	p.expect(lexer.TOKEN_CHECK)
+	p.expect(lexer.TOKEN_LBRACE)
+	node.Condition = p.parseCondition()
+	p.expect(lexer.TOKEN_RBRACE)
 
 	p.expect(lexer.TOKEN_COMMA)
-	p.expect(lexer.TOKEN_BODY)
-	p.expect(lexer.TOKEN_LBRACKET)
+
+	// for{本体}
+	p.expect(lexer.TOKEN_FOR)
+	p.expect(lexer.TOKEN_LBRACE)
 	node.Body = p.parseBlock()
-	p.expect(lexer.TOKEN_RBRACKET)
+	p.expect(lexer.TOKEN_RBRACE)
+
 	p.expect(lexer.TOKEN_RBRACKET)
 	return node
 }
@@ -796,17 +777,11 @@ func (p *Parser) parseExpr() *ast.ExprNode {
 	// (a, b) → 2つのオペランドを取り出す
 	p.expect(lexer.TOKEN_LPAREN)
 	node.Left = p.parseArg()
-	if p.cur().Type == lexer.TOKEN_COLON {
+	if p.cur().Type == lexer.TOKEN_COMMA {
 		p.advance()
 		node.Right = p.parseArg()
 	}
 	p.expect(lexer.TOKEN_RPAREN)
-
-	// *{int(c), +{int(a,b)}} のような第2引数がある場合
-	if p.cur().Type == lexer.TOKEN_COMMA {
-		p.advance()
-		node.Right = p.parseLiteral()
-	}
 
 	p.expect(lexer.TOKEN_RBRACE)
 	return node
@@ -945,6 +920,18 @@ func (p *Parser) parseShare() *ast.ShareNode {
 	p.advance()
 	p.expect(lexer.TOKEN_RPAREN)
 	return &ast.ShareNode{Name: name, Pos: pos}
+}
+
+// ++{i} / --{i}
+func (p *Parser) parseIncr() *ast.IncrNode {
+	pos := p.curPos()
+	op := p.cur().Literal // "++" or "--"
+	p.advance()
+	p.expect(lexer.TOKEN_LBRACE)
+	name := p.cur().Literal
+	p.advance()
+	p.expect(lexer.TOKEN_RBRACE)
+	return &ast.IncrNode{Name: name, Op: op, Pos: pos}
 }
 
 // break{}

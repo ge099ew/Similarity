@@ -11,6 +11,6 @@ Function_public[main{
   Variable[let{int(a:index{arr(0)})}],
   Variable[let{int(b:index{arr(1)})}],
   Variable[let{int(c:index{arr(2)})}],
-  Variable[let{int(result:+{int(+{int(a:b)}:c)})}],
+  Variable[let{int(result:+{int(+{int(a,b)},c)})}],
   return(result)
 }]

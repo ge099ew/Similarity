@@ -6,7 +6,7 @@ Func_pub[main{
   Var[let{int(sum:0)}],
   Loop[for{int(i:0), lesseq(i:100000000), step{1}},
     Body[
-      Mutation[variable{int(sum:+{int(sum:i)})}]
+      Mutation[variable{int(sum:+{int(sum,i)})}]
     ]
   ],
   return(sum)

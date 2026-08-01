@@ -3,12 +3,12 @@ Explanation[Application{Benchmark(type:fibonacci)}]
 Function[fibonacci{
   receive{int(n)},
   If[check{lesseq(n:1)},
-    True[return(n)],
-    False[
-      Variable[let{int(a:call{fibonacci(-{int(n:1)})})}],
-      Variable[let{int(b:call{fibonacci(-{int(n:2)})})}],
-      return(+{int(a:b)})
-    ]
+    True{return(n)},
+    False{
+      Variable[let{int(a:call{fibonacci(-{int(n,1)})})}],
+      Variable[let{int(b:call{fibonacci(-{int(n,2)})})}],
+      return(+{int(a,b)})
+    }
   ]
 }]
 

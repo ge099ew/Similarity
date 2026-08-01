@@ -1,0 +1,29 @@
+Explanation[Application{Benchmark(type:pow)}]
+
+Function[ipow{
+  receive{int(base), int(exp)},
+  Variable[let{int(result:1)}],
+  Variable[let{int(e:0)}],
+  Loop[
+    check{less(e:exp)},
+    for{
+      Mutation[variable{int(result:*{int(result,base)})}],
+      ++{e}
+    }
+  ],
+  return(result)
+}]
+
+Function_public[main{
+  receive{},
+  Variable[let{int(last:0)}],
+  Variable[let{int(i:0)}],
+  Loop[
+    check{less(i:1000000)},
+    for{
+      Mutation[variable{int(last:call{ipow(2, 30)})}],
+      ++{i}
+    }
+  ],
+  return(last)
+}]

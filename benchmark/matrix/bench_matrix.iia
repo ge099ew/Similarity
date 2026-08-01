@@ -1,0 +1,35 @@
+Explanation[Application{Benchmark(type:matrix)}]
+
+# 行列積演算量を模倣: N^3回の mul+add
+# N=200: 8,000,000 回
+
+Function_public[main{
+  receive{},
+  Variable[let{int(N:200)}],
+  Variable[let{int(sum:0)}],
+  Variable[let{int(i:0)}],
+  Variable[let{int(j:0)}],
+  Variable[let{int(k:0)}],
+  Loop[
+    check{less(i:N)},
+    for{
+      Mutation[variable{int(j:0)}],
+      Loop[
+        check{less(j:N)},
+        for{
+          Mutation[variable{int(k:0)}],
+          Loop[
+            check{less(k:N)},
+            for{
+              Mutation[variable{int(sum:+{int(sum,*{int(i,k)})})}],
+              ++{k}
+            }
+          ],
+          ++{j}
+        }
+      ],
+      ++{i}
+    }
+  ],
+  return(sum)
+}]
