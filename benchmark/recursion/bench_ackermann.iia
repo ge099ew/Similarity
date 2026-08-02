@@ -10,16 +10,16 @@ Function[ackermann{
           Variable[let{int(m1:-{int(m,1)})}],
           Variable[let{int(r:call{ackermann(m1, 1)})}],
           return(r)
-        ],
+        },
         False{
           Variable[let{int(n1:-{int(n,1)})}],
           Variable[let{int(inner:call{ackermann(m, n1)})}],
           Variable[let{int(m1:-{int(m,1)})}],
           Variable[let{int(r:call{ackermann(m1, inner)})}],
           return(r)
-        ]
+        }
       ]
-    ]
+    }
   ]
 }]
 
