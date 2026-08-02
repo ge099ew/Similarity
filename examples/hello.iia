@@ -4,6 +4,6 @@
 Import[io{}]
 
 Function_public[main{
-  call{io_print($hello)}
+  call{io_print(hello)}
   return(0)
 }]

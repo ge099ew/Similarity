@@ -1,15 +1,10 @@
-# 警告:書類等の更新が間に合っていません。古い可能性があるため、あまり信用し過ぎないでください。
-<<<<<<< HEAD
-
-=======
->>>>>>> 42c4cf9 (Similarity プロトタイプv0.1)
 # Similarity
 
 **"No GC. No guessing. No C/C++"**
 
 C/C++を玉座から引きずり降ろすために設計されたシステムプログラミング言語。
 
-作者: 奇曲 宮夢 (Kikyoku Miyu)
+作者: 奇曲 宮夢 (Kikyoku Miyu)  
 バージョン: v0.1.0 (Prototype)
 
 ---
@@ -35,12 +30,9 @@ Similarityはその全てを拒否する。
 go build -o sim ./cmd/
 gcc -O2 -o cai_conv cai_converter/cai_converter.c
 
-# 2. Hello World
-./sim --cai examples/hello.iia
-
-# 3. fibonacci
+# 2. fibonacci
 ./sim --cai examples/fibonacci.iia
-./examples/fibonacci.iia.out
+./examples/fibonacci.out
 # → Similarity result: 55  time: 0ms
 ```
 
@@ -50,54 +42,118 @@ gcc -O2 -o cai_conv cai_converter/cai_converter.c
 
 ```
 .iia → lexer → parser → AST → typecheck → echo → caigen → CAI IR → cai_conv → バイナリ
-.sml → transpiler → .iia → 上記パイプライン
 ```
 
-**CAI（Common Assembly Instructions）** はSimilarity独自のIRです。
-`cai_conv`はx86_64機械語を直接生成し、as（アセンブラ）もld（リンカ）も使いません。
+**CAI（Common Assembly Instructions）** はSimilarity独自のIRです。  
+`cai_conv`はx86_64機械語を直接生成し、as（アセンブラ）もld（リンカ）も使いません。  
 静的PIE（ET_DYN）のELFバイナリをsyscallベースで直接出力します。GCC不要。
 
 ---
 
-## 言語の特徴
+## 言語仕様
 
 ### 基本パターン
+
 ```
 カテゴリ[操作{引数}]
 ```
 
-### 変数・制御フロー
+### 変数
+
 ```iia
-Variable[let{int(x:10)}]
-If[check{less(x:0)}, True[...], False[...]]
-Loop[for{int(i:0), less(i:10), step{1}}, Body[...]]
+Variable[let{int(x:10)}]          # ミュータブル
+Variable[unclet{float(PI:3.14)}]  # イミュータブル
+Mutation[variable{int(x:30)}]     # 再代入
+```
+
+### 演算子
+
+```iia
++{int(a,b)}   # 加算
+-{int(a,b)}   # 減算
+*{int(a,b)}   # 乗算
+/{int(a,b)}   # 除算
+++{i}         # インクリメント
+--{i}         # デクリメント
+```
+
+### 比較
+
+```iia
+equal(a:b)     # a == b
+notequal(a:b)  # a != b
+less(a:b)      # a < b
+lesseq(a:b)    # a <= b
+greater(a:b)   # a > b
+greatereq(a:b) # a >= b
+```
+
+### 制御フロー
+
+```iia
+If[check{less(hp:0)},
+  True{...},
+  False{...}
+]
+
+Loop[
+  check{less(i:10)},
+  for{
+    ...,
+    ++{i}
+  }
+]
+
+break{}
+continue{}
 ```
 
 ### 関数
+
 ```iia
 Function[add{
   receive{int(a), int(b)},
-  return(+{int(a:b)})
+  return(+{int(a,b)})
+}]
+
+Function_public[main{
+  receive{},
+  Variable[let{int(result:call{add(1, 2)})}],
+  return(result)
 }]
 ```
 
-### 安全性
-```iia
-Mem[risk{
-  Variable[let{int(val:deref{ptr})}]  # unsafeを明示
-}]
+### 配列
 
+```iia
+Variable[let{Array_int(arr:10)}]          # 10要素のint配列
+Mutation[array{int(arr:0:42)}]            # arr[0] = 42
+Variable[let{int(val:index{arr(0)})}]     # val = arr[0]
+```
+
+### ポインタ
+
+```iia
+Variable[let{int(ptr:addr{x})}]
+Mem[risk{
+  Variable[let{int(val:deref{ptr})}]
+}]
+```
+
+### 非同期
+
+```iia
 Async[{
-  share(x),                            # 共有変数を明示
+  share(x),
   Mutation[variable{int(x:30)}]
 }]
 ```
 
 ### モジュール
+
 ```iia
-Import[io{}]
 Import[math{}]
-Import[string{}]
+Import[io{}]
 ```
 
 ---
@@ -106,16 +162,10 @@ Import[string{}]
 
 | ライブラリ | 主要関数 |
 |---|---|
-| `math` | absolute_value, maximum, minimum, pow_int, clamp |
-| `io` | io_write, io_read, io_open, io_close, io_print |
-| `core` | panic, assert |
-| `string` | str_len, str_compare, str_copy |
-| `memory` | mem_copy, mem_set, mem_zero, mem_compare |
-| `sys` | sys_exit, sys_getpid, sys_sleep |
-| `time` | time_now_ms, time_sleep |
-| `random` | random_next, random_range |
-| `process` | process_exit, process_getpid |
-| `os` | os_mkdir, os_remove, os_rename |
+| `math` | absolute_value, maximum |
+| `io` | io_print |
+
+詳細は `docs/StandardLibrary.md` を参照。
 
 ---
 
@@ -134,16 +184,19 @@ Import[string{}]
 
 ---
 
-## ベンチマーク（vs C++ -O0）
+## ベンチマーク（vs C/C++/Rust、-O0）
 
-| テスト | Similarity (CAI) | C++ (-O0) |
-|---|---|---|
-| fibonacci(40) | ~709ms | ~985ms |
-| sum(0〜1億) | ~180ms | ~268ms |
-| ackermann(3,7) | ~12ms | ~5ms |
+| テスト | Similarity (CAI) | C++ (-O0) | C (-O0) | Rust (-O0) |
+|---|---|---|---|---|
+| fibonacci(40) | 3909ms | 884ms | 902ms | 899ms |
+| sum(0〜1億) | 468ms | 262ms | 266ms | 463ms |
+| bubble_sort(5000²) | 59ms | 61ms | 61ms | 88ms |
+| nested_loop(1Kx1K) | 2ms | 2.4ms | 2.4ms | 3.5ms |
+| matrix(200³) | 29ms | 21ms | 19ms | 28ms |
+| ackermann(3,7) | 9ms | 5.7ms | 5.8ms | 5.2ms |
 
 ```bash
-bash benchmark/run_benchmark_all.sh
+bash benchmark/run_benchmark.sh
 ```
 
 ---
@@ -153,7 +206,6 @@ bash benchmark/run_benchmark_all.sh
 ```
 Similarity/
 ├── cmd/main.go              — エントリーポイント
-├── compiler/                — CompilerContext（Target/ABI/Options/Diagnostics）
 ├── lexer/
 ├── parser/
 ├── ast/
@@ -163,19 +215,9 @@ Similarity/
 │   └── cai_converter.c      — CAI → x86_64機械語直接生成
 ├── echo/                    — riskブロックスキャン
 ├── cel/                     — project.cel管理
-├── stdlib/
-│   ├── math.go
-│   ├── io.go
-│   ├── core.go
-│   ├── string.go
-│   ├── memory.go
-│   ├── sys.go
-│   ├── time.go
-│   ├── random.go
-│   ├── process.go
-│   └── os.go
+├── stdlib/                  — 標準ライブラリ
 ├── examples/                — サンプルコード
-├── benchmark/               — ベンチマーク
+├── benchmark/               — ベンチマーク（C/C++/Rust比較付き）
 └── docs/                    — ドキュメント
 ```
 
@@ -190,13 +232,13 @@ Similarity/
 | CAI IR生成 | ✅ |
 | x86_64機械語直接生成 | ✅ |
 | ELF直接生成 | ✅ |
-| 静的PIE（ET_DYN + ASLR） | ✅ |
-| NX（スタック実行禁止） | ✅ |
-| i32/i64/f32演算 | ✅ |
-| syscall直接呼び出し | ✅ |
-| 標準ライブラリ（10種） | ✅ |
+| 配列（Array_int等） | ✅ |
+| ポインタ/deref/addr | ✅ |
+| 構造体 | ✅ |
+| 非同期（Async/share） | ✅ |
 | Echo（project.eho） | ✅ |
 | Cell（project.cel） | ✅ |
+| 標準ライブラリ | ✅ |
 | APE形式（マルチOS） | 🔶 未着手 |
 | 各言語互換性レイヤー | 🔶 未着手 |
 | GPU本実装 | 🔶 未着手 |
