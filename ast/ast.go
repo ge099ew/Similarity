@@ -7,6 +7,14 @@ type Pos struct {
 	Col  int // 列番号（1始まり）
 }
 
+// TypeSize はAnalyzerが付与する型情報。
+// BackendはTypeやKindなどの文字列フィールドを参照せず、TypeSizeのみを使う。
+type TypeSize struct {
+	Size    int  // バイト数: int=4, float=4, bool=4, String=8, ptr=8, int64=8
+	IsPtr   bool // true: 64bit幅で扱う（String/ptr/int64）
+	IsFloat bool // true: 浮動小数点数（将来のXMM対応用）
+}
+
 // Node ASTの全ノードが実装するインターフェース
 type Node interface {
 	TokenLiteral() string
@@ -35,6 +43,8 @@ type VariableNode struct {
 	Name    string
 	Value   Node
 	Pos     Pos
+	// Analyzerが付与
+	Ann TypeSize // サイズ・ポインタ種別（Backendはこれだけを使う）
 }
 
 // IfNode 条件分岐
@@ -50,6 +60,8 @@ type IfNode struct {
 type ReturnNode struct {
 	Value Node
 	Pos   Pos
+	// Analyzerが付与
+	Ann TypeSize // 戻り値のサイズ・ポインタ種別
 }
 
 func (r *ReturnNode) TokenLiteral() string { return "return" }
@@ -64,6 +76,8 @@ type LoopNode struct {
 	Step      int
 	Body      []Node
 	Pos       Pos
+	// Analyzerが付与
+	LoopDepth int // 0=トップレベル, 1=1重ループ内, 2=2重ループ内, ...
 }
 
 // MutationNode
@@ -72,6 +86,8 @@ type MutationNode struct {
 	Name  string
 	Value Node
 	Pos   Pos
+	// Analyzerが付与
+	Ann TypeSize // 代入先変数のサイズ・ポインタ種別
 }
 
 func (m *MutationNode) TokenLiteral() string { return "Mutation" }
@@ -86,6 +102,9 @@ type FuncNode struct {
 	Body    []Node
 	Returns Node
 	Pos     Pos
+	// Analyzerが付与
+	ReturnAnn TypeSize         // 戻り値のサイズ・ポインタ種別（void: Size=0）
+	LocalVars []*VariableNode  // 関数内の全ローカル変数（引数を除く、宣言順）
 }
 
 // CallNode 関数呼び出し
@@ -94,6 +113,8 @@ type CallNode struct {
 	FuncName string
 	Args     []Node
 	Pos      Pos
+	// Analyzerが付与
+	ReturnAnn TypeSize // 呼び出し先の戻り値サイズ・ポインタ種別
 }
 
 // ErrorNode エラーハンドリング
@@ -161,6 +182,8 @@ type LiteralNode struct {
 	Value string
 	Line  int
 	Pos   Pos
+	// Analyzerが付与
+	Ann TypeSize // リテラルのサイズ・ポインタ種別（IDENTは参照先変数の型）
 }
 
 // ConditionNode 比較条件（le, lt, eq など）
@@ -169,6 +192,9 @@ type ConditionNode struct {
 	Left  string
 	Right string
 	Pos   Pos
+	// Analyzerが付与
+	LeftAnn  TypeSize // Left変数/リテラルの型（Backendがcmp幅を決める）
+	RightAnn TypeSize // Right変数/リテラルの型
 }
 
 func (l *LiteralNode) TokenLiteral() string   { return l.Value }
@@ -181,8 +207,10 @@ type ExprNode struct {
 	Op    string // + - * /
 	Left  Node
 	Right Node
-	Type  string // int / float など
+	Type  string // int / float など（Parser設定。BackendはAnnを使う）
 	Pos   Pos
+	// Analyzerが付与
+	Ann TypeSize // 演算結果のサイズ・ポインタ種別
 }
 
 func (e *ExprNode) TokenLiteral() string { return e.Op }
@@ -264,6 +292,8 @@ type CastNode struct {
 	Type  string
 	Value Node
 	Pos   Pos
+	// Analyzerが付与
+	Ann TypeSize // キャスト先のサイズ・ポインタ種別
 }
 
 func (c *CastNode) TokenLiteral() string { return "cast" }
@@ -275,6 +305,8 @@ type IndexNode struct {
 	Name  string
 	Index Node
 	Pos   Pos
+	// Analyzerが付与
+	ElemAnn TypeSize // 要素1個のサイズ・ポインタ種別
 }
 
 func (i *IndexNode) TokenLiteral() string { return "index" }
@@ -346,6 +378,8 @@ type ArrayNode struct {
 	Size     int  // 要素数
 	Mutable  bool // let=true, unclet=false
 	Pos      Pos
+	// Analyzerが付与
+	Ann TypeSize // 配列全体のサイズ（ElemSize * 要素数）
 }
 
 func (a *ArrayNode) TokenLiteral() string { return "Array" }
@@ -359,6 +393,8 @@ type ArrayStoreNode struct {
 	Index    Node   // インデックス
 	Value    Node   // 書き込む値
 	Pos      Pos
+	// Analyzerが付与
+	ElemAnn TypeSize // 要素1個のサイズ・ポインタ種別
 }
 
 func (a *ArrayStoreNode) TokenLiteral() string { return "array" }
@@ -370,6 +406,8 @@ type IncrNode struct {
 	Name string
 	Op   string // "++" or "--"
 	Pos  Pos
+	// Analyzerが付与
+	Ann TypeSize // ++/-- する変数のサイズ・ポインタ種別
 }
 
 func (n *IncrNode) TokenLiteral() string { return n.Op }

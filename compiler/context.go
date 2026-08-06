@@ -66,11 +66,20 @@ func (a ABI) TypeSize(typeName string) int {
 
 // Options はコンパイルオプションをまとめる
 type Options struct {
-	IROnly   bool   // --ir-only: CAI IRファイルのみ生成
-	UseCAI   bool   // --cai: CAIバックエンドを使用
-	Verbose  bool   // --verbose: 詳細ログ出力
+	IROnly    bool   // --ir-only: CAI IRファイルのみ生成
+	UseCAI    bool   // --cai: CAIバックエンドを使用
+	Verbose   bool   // --verbose: 詳細ログ出力
 	InputFile string // 入力ファイルパス
 	OutputDir string // 出力先ディレクトリ
+
+	// デバッグオプション（各コンパイルステージの出力を確認する）
+	DumpTokens   bool // --dump-tokens:    Lexer出力を表示
+	DumpAST      bool // --dump-ast:       Parser出力（AST）を表示
+	DumpTypes    bool // --dump-types:     TypeChecker通過後の型情報を表示
+	DumpAnalyzer bool // --dump-analyzer:  Analyzer通過後のAnnotation付きASTを表示
+	DumpCFG      bool // --dump-cfg:       BackendのCFGを表示（Backend実装後に有効化）
+	DumpRegAlloc bool // --dump-regalloc:  レジスタ割り当て結果を表示（Backend実装後に有効化）
+	DumpMachine  bool // --dump-machine:   最終機械語/逆アセンブルを表示（Backend実装後に有効化）
 }
 
 // ===== Severity =====

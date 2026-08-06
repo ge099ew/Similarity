@@ -5,6 +5,7 @@ package compiler
 import (
 	"fmt"
 	"similarity/ast"
+	"similarity/debug"
 	"similarity/lexer"
 	"similarity/parser"
 	"similarity/typecheck"
@@ -13,6 +14,7 @@ import (
 // FrontendResult はフロントエンドパスの出力
 type FrontendResult struct {
 	Program *ast.Program
+	Tokens  []lexer.Token // デバッグ用: --dump-tokens で使用
 }
 
 // RunFrontend はlexer→parser→typecheckを実行し、
@@ -24,6 +26,11 @@ func RunFrontend(ctx *CompilerContext) *FrontendResult {
 	// ===== Lexer =====
 	l := lexer.New(ctx.Source)
 	tokens := l.Tokenize()
+
+	// --dump-tokens
+	if ctx.Options.DumpTokens {
+		debug.DumpTokens(tokens)
+	}
 
 	if len(l.Errors) > 0 {
 		fmt.Println("=== Lexer Errors ===")
@@ -37,6 +44,11 @@ func RunFrontend(ctx *CompilerContext) *FrontendResult {
 	ctx.Logf("frontend: parser start")
 	p := parser.New(tokens)
 	prog := p.ParseProgram()
+
+	// --dump-ast
+	if ctx.Options.DumpAST {
+		debug.DumpAST(prog)
+	}
 
 	if len(p.Errors) > 0 {
 		fmt.Println("=== Parser Errors ===")
@@ -55,6 +67,11 @@ func RunFrontend(ctx *CompilerContext) *FrontendResult {
 	checker := typecheck.New()
 	checkErrors := checker.Check(prog)
 
+	// --dump-types
+	if ctx.Options.DumpTypes {
+		debug.DumpTypes(prog)
+	}
+
 	if len(checkErrors) > 0 {
 		fmt.Println("=== Type Check Errors ===")
 		for _, e := range checkErrors {
@@ -66,5 +83,5 @@ func RunFrontend(ctx *CompilerContext) *FrontendResult {
 	}
 
 	ctx.Logf("frontend: done")
-	return &FrontendResult{Program: prog}
+	return &FrontendResult{Program: prog, Tokens: tokens}
 }

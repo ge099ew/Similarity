@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"similarity/analyzer"
 	"similarity/compiler"
+	"similarity/debug"
 	"similarity/transpiler"
 	"strings"
 )
@@ -68,6 +70,26 @@ func runCAI(src string, opts compiler.Options) {
 		os.Exit(1)
 	}
 
+	// Analyzer（ASTにAnnotationを付与）
+	a := analyzer.New()
+	a.Annotate(result.Program)
+
+	// --dump-analyzer
+	if opts.DumpAnalyzer {
+		debug.DumpAnalyzer(result.Program)
+	}
+
+	// --dump-cfg / --dump-regalloc / --dump-machine（Backend実装後に有効化）
+	if opts.DumpCFG {
+		debug.DumpCFG()
+	}
+	if opts.DumpRegAlloc {
+		debug.DumpRegAlloc()
+	}
+	if opts.DumpMachine {
+		debug.DumpMachine()
+	}
+
 	// CAIパイプライン（CAI IR生成 → cai_conv → バイナリ）
 	compiler.RunCAIPipeline(ctx, result.Program)
 
@@ -87,6 +109,20 @@ func parseArgs(args []string) compiler.Options {
 			opts.UseCAI = true
 		case "--verbose":
 			opts.Verbose = true
+		case "--dump-tokens":
+			opts.DumpTokens = true
+		case "--dump-ast":
+			opts.DumpAST = true
+		case "--dump-types":
+			opts.DumpTypes = true
+		case "--dump-analyzer":
+			opts.DumpAnalyzer = true
+		case "--dump-cfg":
+			opts.DumpCFG = true
+		case "--dump-regalloc":
+			opts.DumpRegAlloc = true
+		case "--dump-machine":
+			opts.DumpMachine = true
 		default:
 			opts.InputFile = arg
 		}
@@ -105,7 +141,18 @@ func loadSource(filename string) (string, string, error) {
 }
 
 func printUsage() {
-	fmt.Println("Usage: sim [--ir-only] [--verbose] <file.iia|file.sml>")
-	fmt.Println("  --ir-only : CAI IRファイルのみ生成")
-	fmt.Println("  --verbose : 詳細ログ出力")
+	fmt.Println("Usage: sim [options] <file.iia|file.sml>")
+	fmt.Println()
+	fmt.Println("Options:")
+	fmt.Println("  --ir-only        CAI IRファイルのみ生成")
+	fmt.Println("  --verbose        詳細ログ出力")
+	fmt.Println()
+	fmt.Println("Debug options:")
+	fmt.Println("  --dump-tokens    Lexer出力を表示")
+	fmt.Println("  --dump-ast       Parser出力（AST）を表示")
+	fmt.Println("  --dump-types     TypeChecker通過後の型情報を表示")
+	fmt.Println("  --dump-analyzer  Analyzer通過後のAnnotation付きASTを表示")
+	fmt.Println("  --dump-cfg       Backend CFGを表示（Backend実装後に有効化）")
+	fmt.Println("  --dump-regalloc  レジスタ割り当て結果を表示（Backend実装後に有効化）")
+	fmt.Println("  --dump-machine   最終機械語を表示（Backend実装後に有効化）")
 }
