@@ -77,7 +77,8 @@ type Options struct {
 	DumpAST      bool // --dump-ast:       Parser出力（AST）を表示
 	DumpTypes    bool // --dump-types:     TypeChecker通過後の型情報を表示
 	DumpAnalyzer bool // --dump-analyzer:  Analyzer通過後のAnnotation付きASTを表示
-	DumpCFG      bool // --dump-cfg:       BackendのCFGを表示（Backend実装後に有効化）
+	DumpBackend  bool // --dump-backend:   BackendFunction生成直後の内容を表示
+	DumpCFG      bool // --dump-cfg:       CFG生成直後の内容を表示
 	DumpRegAlloc bool // --dump-regalloc:  レジスタ割り当て結果を表示（Backend実装後に有効化）
 	DumpMachine  bool // --dump-machine:   最終機械語/逆アセンブルを表示（Backend実装後に有効化）
 }

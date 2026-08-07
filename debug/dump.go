@@ -6,8 +6,9 @@
 //	--dump-ast       Parser     → DumpAST()
 //	--dump-types     TypeChecker→ DumpTypes()
 //	--dump-analyzer  Analyzer   → DumpAnalyzer()
-//	--dump-cfg       Backend    → DumpCFG()       ※Backend実装後に有効化
-//	--dump-regalloc  Backend    → DumpRegAlloc()  ※Backend実装後に有効化
+//	--dump-backend   Backend    → DumpBackend()   BackendFunction生成直後を表示
+//	--dump-cfg       Backend    → DumpCFG()        CFG生成直後を表示
+//	--dump-regalloc  Backend    → DumpRegAlloc()  ※RegAlloc実装後に有効化
 //	--dump-machine   Backend    → DumpMachine()   ※Backend実装後に有効化
 //
 // 通常のコンパイル処理には一切影響を与えない。
@@ -18,6 +19,7 @@ import (
 	"strings"
 
 	"similarity/ast"
+	"similarity/backend"
 	"similarity/lexer"
 )
 
@@ -533,12 +535,14 @@ func collectMutations(body []ast.Node) []*ast.MutationNode {
 // Backend実装後に有効化する。現時点では「未実装」を表示するのみ。
 // =============================================================
 
-// DumpCFG はBackendが生成したCFGを表示する。
-// Backend実装後に内容を実装する。
-func DumpCFG() {
+// DumpCFG はCFGを標準出力に表示する。
+// BackendFunc変更なし・ASTへの影響なし。
+func DumpCFG(cfgs []*backend.CFG) {
 	fmt.Println("===== DUMP: cfg =====")
-	fmt.Println("  (Backend未実装 - Stage 2以降で有効化)")
 	fmt.Println()
+	for _, cfg := range cfgs {
+		fmt.Print(cfg.Dump())
+	}
 }
 
 // DumpRegAlloc はレジスタ割り当て結果を表示する。
@@ -555,4 +559,144 @@ func DumpMachine() {
 	fmt.Println("===== DUMP: machine =====")
 	fmt.Println("  (Backend未実装 - Stage 2以降で有効化)")
 	fmt.Println()
+}
+
+// =============================================================
+// --dump-backend: BackendFunction生成直後の内容を表示
+// =============================================================
+
+// DumpBackend はBackendFunction生成直後の内容を表示する。
+// BackendFunctionの内容を変更しない。表示専用。
+// Analyzerが付与したAnnotation情報（size/ptr/LoopDepth等）をそのまま表示する。
+func DumpBackend(funcs []backend.BackendFunc) {
+	fmt.Println("===== DUMP: backend =====")
+	fmt.Println()
+	for _, fn := range funcs {
+		dumpBackendFunc(fn)
+	}
+}
+
+func dumpBackendFunc(fn backend.BackendFunc) {
+	pub := ""
+	if fn.IsPublic {
+		pub = " [public]"
+	}
+	fmt.Printf("===== Function: %s%s =====\n\n", fn.Name, pub)
+
+	// Return
+	fmt.Println("Return")
+	fmt.Printf("  size=%d\n", fn.RetSize)
+	fmt.Printf("  ptr=%v\n", fn.RetPtr)
+	fmt.Println()
+
+	// Parameters
+	fmt.Println("Parameters")
+	if len(fn.Params) == 0 {
+		fmt.Println("  (none)")
+	} else {
+		for _, p := range fn.Params {
+			fmt.Printf("  p%d\n", p.Index)
+			fmt.Printf("    name=%-12s  type=%-8s  size=%d  ptr=%v\n",
+				p.Name, p.Type, p.Size, p.IsPtr)
+		}
+	}
+	fmt.Println()
+
+	// Local Variables
+	fmt.Println("Local Variables")
+	if len(fn.Locals) == 0 {
+		fmt.Println("  (none)")
+	} else {
+		for _, v := range fn.Locals {
+			fmt.Printf("  v%d\n", v.Index)
+			fmt.Printf("    name=%-12s  type=%-8s  size=%d  ptr=%v\n",
+				v.Name, v.Type, v.Size, v.IsPtr)
+		}
+	}
+	fmt.Println()
+
+	// Statements（Backend Blocksとして表示）
+	fmt.Println("Backend Blocks")
+	blockIdx := 0
+	dumpBFStmts(fn.Stmts, 0, &blockIdx)
+	fmt.Println()
+
+	fmt.Println(strings.Repeat("=", 40))
+	fmt.Println()
+}
+
+func dumpBFStmts(stmts []backend.BFStmt, depth int, blockIdx *int) {
+	ind := strings.Repeat("  ", depth)
+	for _, s := range stmts {
+		dumpBFStmt(s, depth, ind, blockIdx)
+	}
+}
+
+func dumpBFStmt(s backend.BFStmt, depth int, ind string, blockIdx *int) {
+	switch s.Kind {
+	case backend.BFStmtVariable:
+		fmt.Printf("%sVariable(%s)  size=%d  ptr=%v  = %s\n",
+			ind, s.VarName, s.VarSize, s.VarPtr, s.Expr)
+
+	case backend.BFStmtMutation:
+		fmt.Printf("%sMutation(%s)  size=%d  ptr=%v  = %s\n",
+			ind, s.VarName, s.VarSize, s.VarPtr, s.Expr)
+
+	case backend.BFStmtIncr:
+		fmt.Printf("%sIncr(%s %s)  size=%d  ptr=%v\n",
+			ind, s.IncrName, s.IncrOp, s.IncrSize, s.IncrPtr)
+
+	case backend.BFStmtLoop:
+		fmt.Printf("%sBlock #%d  kind=loop  depth=%d\n", ind, *blockIdx, s.LoopDepth)
+		*blockIdx++
+		c := s.LoopCond
+		fmt.Printf("%s  Cond: %s(%s[sz=%d ptr=%v] : %s[sz=%d ptr=%v])\n",
+			ind, c.Op,
+			c.Left, c.LeftSize, c.LeftPtr,
+			c.Right, c.RightSize, c.RightPtr)
+		fmt.Printf("%s  Statements\n", ind)
+		dumpBFStmts(s.LoopBody, depth+2, blockIdx)
+
+	case backend.BFStmtIf:
+		fmt.Printf("%sBlock #%d  kind=if\n", ind, *blockIdx)
+		*blockIdx++
+		c := s.IfCond
+		fmt.Printf("%s  Cond: %s(%s[sz=%d ptr=%v] : %s[sz=%d ptr=%v])\n",
+			ind, c.Op,
+			c.Left, c.LeftSize, c.LeftPtr,
+			c.Right, c.RightSize, c.RightPtr)
+		if len(s.IfTrue) > 0 {
+			fmt.Printf("%s  True:\n", ind)
+			dumpBFStmts(s.IfTrue, depth+2, blockIdx)
+		}
+		if len(s.IfFalse) > 0 {
+			fmt.Printf("%s  False:\n", ind)
+			dumpBFStmts(s.IfFalse, depth+2, blockIdx)
+		}
+
+	case backend.BFStmtReturn:
+		fmt.Printf("%sReturn  size=%d  ptr=%v  = %s\n",
+			ind, s.RetSize, s.RetPtr, s.RetExpr)
+
+	case backend.BFStmtReturnVoid:
+		fmt.Printf("%sReturn(void)\n", ind)
+
+	case backend.BFStmtCall:
+		fmt.Printf("%sCall(%s)  ret_size=%d  ret_ptr=%v\n",
+			ind, s.CallName, s.CallRetSize, s.CallRetPtr)
+
+	case backend.BFStmtArrStore:
+		fmt.Printf("%sArrStore(%s)  elem_size=%d  elem_ptr=%v\n",
+			ind, s.ArrName, s.ElemSize, s.ElemPtr)
+
+	case backend.BFStmtBreak:
+		fmt.Printf("%sBreak\n", ind)
+
+	case backend.BFStmtContinue:
+		fmt.Printf("%sContinue\n", ind)
+
+	case backend.BFStmtRawMem:
+		fmt.Printf("%sRawMem[risk]\n", ind)
+		dumpBFStmts(s.RawMemBody, depth+1, blockIdx)
+	}
 }

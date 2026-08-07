@@ -79,7 +79,16 @@ func runCAI(src string, opts compiler.Options) {
 		debug.DumpAnalyzer(result.Program)
 	}
 
-	// --dump-cfg / --dump-regalloc / --dump-machine（Backend実装後に有効化）
+	// BackendFunction生成（--dump-backend / 将来のCFG生成で使用）
+	bfuncs := backend.New()
+	// 将来のCFGパスで使用する
+
+	// --dump-backend
+	if opts.DumpBackend {
+		debug.DumpBackend(bfuncs)
+	}
+
+	// --dump-cfg / --dump-regalloc / --dump-machine（CFG/RegAlloc実装後に有効化）
 	if opts.DumpCFG {
 		debug.DumpCFG()
 	}
@@ -117,6 +126,8 @@ func parseArgs(args []string) compiler.Options {
 			opts.DumpTypes = true
 		case "--dump-analyzer":
 			opts.DumpAnalyzer = true
+		case "--dump-backend":
+			opts.DumpBackend = true
 		case "--dump-cfg":
 			opts.DumpCFG = true
 		case "--dump-regalloc":
@@ -152,7 +163,8 @@ func printUsage() {
 	fmt.Println("  --dump-ast       Parser出力（AST）を表示")
 	fmt.Println("  --dump-types     TypeChecker通過後の型情報を表示")
 	fmt.Println("  --dump-analyzer  Analyzer通過後のAnnotation付きASTを表示")
-	fmt.Println("  --dump-cfg       Backend CFGを表示（Backend実装後に有効化）")
+	fmt.Println("  --dump-backend   BackendFunction生成直後の内容を表示")
+	fmt.Println("  --dump-cfg       Backend CFGを表示（CFG実装後に有効化）")
 	fmt.Println("  --dump-regalloc  レジスタ割り当て結果を表示（Backend実装後に有効化）")
 	fmt.Println("  --dump-machine   最終機械語を表示（Backend実装後に有効化）")
 }
