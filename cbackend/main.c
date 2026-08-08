@@ -1,27 +1,38 @@
 /*
  * main.c — sim_backend エントリーポイント
  *
- * Stage 2: BIRファイルを読んでBackendFunctionを構築し、ダンプする。
- *          機械語生成・ELF出力はStage 3以降で実装する。
+ * Stage 3: BIRファイルを読んでBackendFunctionを構築し、CFGを生成する。
+ *          機械語生成・ELF出力はStage 4以降で実装する。
  *
  * 使い方:
- *   sim_backend <input.bir> <output.elf> [--dump]
+ *   sim_backend <input.bir> <output.elf> [options]
+ *
+ * options:
+ *   --dump          BackendFunctionの内容を表示
+ *   --dump-cfg      CFGを表示
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "backend.h"
+#include "cfg.h"
 
 int main(int argc, char *argv[]) {
     if (argc < 3) {
-        fprintf(stderr, "Usage: sim_backend <input.bir> <output.elf> [--dump]\n");
+        fprintf(stderr, "Usage: sim_backend <input.bir> <output.elf> [--dump] [--dump-cfg]\n");
         return 1;
     }
 
     const char *bir_path = argv[1];
     const char *out_path = argv[2];
-    bool do_dump = (argc >= 4 && strcmp(argv[3], "--dump") == 0);
+
+    bool do_dump     = false;
+    bool do_dump_cfg = false;
+    for (int i = 3; i < argc; i++) {
+        if (strcmp(argv[i], "--dump")     == 0) do_dump     = true;
+        if (strcmp(argv[i], "--dump-cfg") == 0) do_dump_cfg = true;
+    }
 
     /* BIRファイルを読んでBackendProgramを構築 */
     BackendProgram *prog = bir_parse(bir_path);
@@ -38,23 +49,32 @@ int main(int argc, char *argv[]) {
         bir_dump(prog);
     }
 
+    /* CFGを構築 */
+    CFGProgram *cfgprog = cfg_build_program(prog);
+
+    /* --dump-cfg: CFGを表示 */
+    if (do_dump_cfg) {
+        cfg_program_dump(cfgprog);
+    }
+
     /*
-     * Stage 2 完了: BackendFunction構築まで実装。
-     * CFG生成・命令選択・レジスタ割り当て・ELF生成はStage 3以降で実装する。
-     *
-     * 現時点では出力ファイルを空で作成して終了する。
+     * Stage 3 完了: CFG構築まで実装。
+     * Instruction Selection / VReg / Liveness / RegAlloc / x86-64 / ELF
+     * は Stage 4 以降で実装する。
      */
     FILE *out = fopen(out_path, "wb");
     if (!out) {
         fprintf(stderr, "出力ファイルを開けません: %s\n", out_path);
+        cfg_program_free(cfgprog);
         bir_free(prog);
         return 1;
     }
     fclose(out);
 
-    fprintf(stderr, "Stage 2 complete: BackendFunction built. "
-            "CFG/ISel/ELF will be implemented in Stage 3.\n");
+    fprintf(stderr, "Stage 3 complete: CFG built (%d functions).\n",
+            cfgprog->ncfgs);
 
+    cfg_program_free(cfgprog);
     bir_free(prog);
     return 0;
 }

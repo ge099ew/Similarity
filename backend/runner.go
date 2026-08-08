@@ -11,10 +11,17 @@ import (
 	"similarity/ast"
 )
 
+// RunOptions はCバックエンド実行時のオプション。
+type RunOptions struct {
+	DumpBackend bool // --dump: BackendFunctionのダンプ
+	DumpCFG     bool // --dump-cfg: CFGのダンプ（C Backend側で実装）
+}
+
 // Run はAnnotated ASTをBIR形式にシリアライズしてCバックエンドを実行する。
 // birFile: 生成するBIRファイルのパス
 // outFile: 出力ELFバイナリのパス
-func Run(prog *ast.Program, birFile, outFile string) error {
+// opts:    Cバックエンドへ渡すオプション
+func Run(prog *ast.Program, birFile, outFile string, opts RunOptions) error {
 	// Step 1: Annotated AST → BIR テキスト生成
 	bir := Serialize(prog)
 
@@ -23,9 +30,16 @@ func Run(prog *ast.Program, birFile, outFile string) error {
 		return fmt.Errorf("BIRファイル書き出し失敗: %w", err)
 	}
 
-	// Step 3: Cバックエンドバイナリを探して実行
+	// Step 3: Cバックエンドバイナリを探してフラグ付きで実行
 	backendPath := findBackend()
-	cmd := exec.Command(backendPath, birFile, outFile)
+	args := []string{birFile, outFile}
+	if opts.DumpBackend {
+		args = append(args, "--dump")
+	}
+	if opts.DumpCFG {
+		args = append(args, "--dump-cfg")
+	}
+	cmd := exec.Command(backendPath, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -43,21 +57,28 @@ func WriteBIR(prog *ast.Program, birFile string) error {
 }
 
 // findBackend は sim_backend バイナリのパスを探す。
+// 実際のバイナリは cbackend/sim_backend に存在する。
 func findBackend() string {
-	exePath, err := os.Executable()
-	if err == nil {
-		candidates := []string{
-			filepath.Join(filepath.Dir(exePath), "sim_backend"),
-			filepath.Join(".", "sim_backend"),
-			"./cbackend/sim_backend",
-		}
-		for _, c := range candidates {
-			if _, err := os.Stat(c); err == nil {
-				return c
-			}
+	// 固定候補: cbackend/sim_backend を最優先で確認する
+	candidates := []string{
+		"./cbackend/sim_backend",
+		"cbackend/sim_backend",
+	}
+	// os.Executable() が取れる場合は sim と同じディレクトリの cbackend/ も確認
+	if exePath, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exePath)
+		candidates = append(candidates,
+			filepath.Join(exeDir, "cbackend", "sim_backend"),
+			filepath.Join(exeDir, "sim_backend"),
+		)
+	}
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			return c
 		}
 	}
-	return "./sim_backend"
+	// 最終フォールバック
+	return "./cbackend/sim_backend"
 }
 
 // BIRPath は入力ファイルパスに対応するBIRファイルパスを返す。

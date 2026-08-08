@@ -88,11 +88,16 @@ func runCAI(src string, opts compiler.Options) {
 		debug.DumpBackend(bfuncs)
 	}
 
-	// --dump-cfg / --dump-regalloc / --dump-machine はC Backend側で実装
-	// sim_backend に --dump-cfg 等のフラグを渡して実行する（C Backend実装後に有効化）
-	if opts.DumpCFG {
-		debug.DumpCFG()
+	// BIRシリアライズ + Cバックエンド呼び出し（--dump-cfg 等のフラグを渡す）
+	birFile := backend.BIRPath(ctx.InputFile)
+	outFile := backend.OutPath(ctx.InputFile)
+	runOpts := backend.RunOptions{
+		DumpCFG: opts.DumpCFG,
 	}
+	if err := backend.Run(result.Program, birFile, outFile, runOpts); err != nil {
+		fmt.Fprintf(os.Stderr, "Cバックエンド失敗: %v\n", err)
+	}
+
 	if opts.DumpRegAlloc {
 		debug.DumpRegAlloc()
 	}
@@ -100,8 +105,10 @@ func runCAI(src string, opts compiler.Options) {
 		debug.DumpMachine()
 	}
 
-	// CAIパイプライン（CAI IR生成 → cai_conv → バイナリ）
-	compiler.RunCAIPipeline(ctx, result.Program)
+	// CAIパイプライン（旧バックエンド: 将来廃止予定）
+	if !opts.DumpCFG {
+		compiler.RunCAIPipeline(ctx, result.Program)
+	}
 
 	// エラーがあれば終了コード1
 	if ctx.Diagnostics.HasErrors() {
