@@ -2,269 +2,230 @@
 
 **No,GC. No,guessing. No,C/C++.**
 
-No garbage collector. No compiler guessing. No dependency on C/C++.
+*No garbage collector. No compiler guessing. No dependency on C/C++.*
+
+Similarityは、メモリ管理・型・危険な操作・並行処理などを可能な限り明示的に扱うことを目指して設計されたシステムプログラミング言語です。
 
 作者: 奇曲 宮夢 (Kikyoku Miyu)
 バージョン: v0.1.0 (Prototype)
 
 ---
 
-## Why Similarity?
+## Similarityとは
 
-Similarityは、システムプログラミングにおける「暗黙的な動作」を可能な限り排除し、プログラマがプログラムの動作を明確に把握できることを目指しています。
+Similarityは、システムプログラミングにおける「暗黙的な動作」を減らし、プログラマがプログラムの動作を明確に記述できることを重視しています。
 
-* **No GC** — ガベージコレクタによる暗黙的なメモリ管理に依存しない
-* **No compiler guessing** — コンパイラによる意図しない推測を避け、操作を明示する
-* **Explicit unsafe** — unsafeなメモリアクセスは `Mem[risk{}]` として明示する
-* **Explicit sharing** — 非同期処理間の共有状態は `share()` で明示する
-* **No dependency on C/C++** — 特定のC/C++コンパイラやツールチェーンに依存しないバックエンドを構築する
+設計思想は次の3点に集約されます。
 
-Similarityは単にC/C++とは異なる構文を持つ言語ではありません。
+* **No garbage collector.** — GCによるメモリ管理を前提としない
+* **No compiler guessing.** — コンパイラによる過度な推測に依存しない
+* **No dependency on C/C++.** — C/C++やGCC・LLVMを実行基盤として必要としない
 
-**フロントエンドから機械語生成までを、自身で制御できるシステムプログラミング基盤**を目指しています。
+これらは単なるキャッチコピーではなく、Similarityの設計方針を表すものです。
 
 ---
 
-# Compiler Architecture
+# コンパイラ
 
-Similarityのコンパイラは、複数の明確な段階に分離されています。
+Similarityのコンパイラは、ソースコードを解析し、CAIによって最終的なx86-64 ELFバイナリまで変換します。
 
 ```text
 .iia
-  ↓
+ ↓
 Lexer
-  ↓
+ ↓
 Parser
-  ↓
-AST
-  ↓
+ ↓
 TypeChecker
-  ↓
+ ↓
 Analyzer
-  ↓
+ ↓
+BackendFunction ←CAI側のBackendFunctionに送る
+ ↓
+CAI
+ ├─ BackendFunction ←Go側のBackendFunctionを受け取る
+ ├─ CFG
+ ├─ Instruction Selection
+ ├─ Virtual Registers
+ ├─ Register Allocation
+ ├─ x86-64
+ └─ ELF
+```
+
+## CAI
+
+**CAI（Common Assembly Instructions）は、Similarityのバックエンド全体を指します。**
+
+CAIは単独の中間表現ではありません。
+
+Similarityの`BackendFunction`から始まり、
+
+```text
 BackendFunction
-  ↓
-BIR
-  ↓
-C Backend
-  ↓
+    ↓
 CFG
-  ↓
+    ↓
 Instruction Selection
-  ↓
+    ↓
 Virtual Registers
-  ↓
+    ↓
 Register Allocation
-  ↓
+    ↓
 x86-64
-  ↓
+    ↓
 ELF
 ```
 
-各段階は明確な責務を持ち、FrontendとBackendの間にはBIRを配置しています。
+までのバックエンド処理全体がCAIです。
 
-現在は旧CAIベースのバックエンドから、新しいBIRベースのバックエンドへ移行しています。
+そのため、SimilarityはCAIのために別の中間表現を挟む設計を採用していません。
 
----
+CAIは、Similarityのフロントエンドとx86-64コード生成を接続するバックエンドとして設計されています。
 
-# BIR
-
-BIR（Backend Intermediate Representation）は、FrontendとBackendを接続する中間表現です。
-
-例えば、関数呼び出しを含むプログラムは以下のようなBIRへ変換されます。
-
-```text
-BIR 1
-
-FUNC inc 0 4 0
-PARAM x 4 0
-BODY
-RET 4 0 EXPR + 4 0 IDENT x 4 0 LIT_INT 1
-ENDFUNC
-
-FUNC main 1 4 0
-LOCAL v 4 0
-LOCAL i 4 0
-BODY
-STORE v 4 0 LIT_INT 0
-STORE i 4 0 LIT_INT 0
-LOOP 0
-COND less i 4 0 1000000 4 0
-LOOPBODY
-STORE v 4 0 CALL inc 4 0 1 IDENT v 4 0
-INCR i 4 0 INC
-ENDLOOP
-RET 4 0 IDENT v 4 0
-ENDFUNC
-```
-
-BIRはASTをBackendが扱いやすい形へ整理し、以降のCFG構築やInstruction Selectionで使用されます。
+※また、CAIは現在C言語で書かれていますが、将来的にはC依存の無いもので書きます。
 
 ---
 
-# Control Flow Graph
+# BackendFunction
 
-BIRから制御フローグラフ（CFG）を構築します。
-
-現在のCFG実装では、以下の制御構造を扱えます。
-
-* Entry block
-* Return block
-* If
-* If true / false
-* Merge
-* Loop header
-* Loop body
-* Loop exit
-* Back edge
-* Nested loop
-* Function call
-* Multiple functions
-
-例えば単純なループは、
+`BackendFunction`は、Analyzerによる解析結果をCAIへ渡すためのバックエンド用表現です。
 
 ```text
-Block #0 [entry]
-    ↓
-Block #1 [loop_header]
-    ├── false → Block #2 [loop_exit]
-    └── true  → Block #3 [loop_body]
-                    ↓
-                 Block #1
+Analyzer
+   ↓
+BackendFunction
+   ↓
+CAI
 ```
 
-のように表現されます。
+BackendFunctionは、ソースコードのASTそのものではなく、バックエンドが必要とする情報を保持します。
 
-Nested loopではloop depthも保持します。
+CAIはBackendFunctionを入力としてCFGを構築し、その後のコード生成処理を行います。
+
+---
+
+# CFG
+
+CAIでは、BackendFunctionから制御フローグラフ（CFG）を構築します。
 
 ```text
-Block #4 [loop_header] depth=1
-Block #7 [loop_header] depth=2
+BackendFunction
+      ↓
+     CFG
 ```
 
-各Blockは、
+CFGでは、プログラムを基本ブロックへ分割し、
 
-* Successors
-* Predecessors
-* Condition
-* Loop depth
-* Instructions
+* ブロック間の制御フロー
+* successor
+* predecessor
+* 条件分岐
+* ループ
+* ループ深度
 
-などの情報を保持します。
+などを管理します。
+
+例えば、
+
+```text
+entry
+  ↓
+loop_header
+ ├──→ loop_exit
+ ↓
+loop_body
+ └──→ loop_header
+```
+
+のような制御構造をCAI内部で表現します。
 
 ---
 
 # Instruction Selection
 
-CFG構築後、Instruction SelectionによってBackend上の操作をx86-64命令へ対応付けます。
-
-現在の開発では、この段階をStage 4として実装しています。
+CFG構築後、CAIは各BackendFunctionの処理をx86-64向けの命令へ変換していきます。
 
 ```text
 CFG
  ↓
 Instruction Selection
- ↓
-Virtual Registers
 ```
 
-Instruction Selectionでは、プログラムの演算や制御を機械命令へ変換可能な形に落とし込みます。
+この段階では、演算・比較・分岐・関数呼び出し・メモリアクセスなどを、ターゲットとなる命令列へ落とし込みます。
 
-例えば、
-
-```text
-a = b + c
-```
-
-という抽象的な演算を、最終的なx86-64命令列へ変換するためのMachine-level representationへ変換します。
+Similarityでは、最終的な機械語生成までをCAI内部で管理することを目指しています。
 
 ---
 
 # Virtual Registers
 
-Instruction Selectionでは、物理レジスタへ直接割り当てず、Virtual Registerを使用します。
+命令選択によって生成された値は、仮想レジスタとして管理されます。
 
 ```text
-v0 = ...
-v1 = ...
-v2 = ...
-```
-
-その後、
-
-```text
+Instruction Selection
+        ↓
 Virtual Registers
-        ↓
-Register Allocation
-        ↓
-Physical Registers
 ```
 
-という流れでx86-64の物理レジスタへ割り当てます。
-
-これにより、Instruction SelectionとRegister Allocationの責務を分離します。
+仮想レジスタによって、命令選択段階と物理レジスタ割り当てを分離します。
 
 ---
 
 # Register Allocation
 
-Virtual Registerをx86-64の物理レジスタへ割り当てます。
+仮想レジスタを実際のx86-64物理レジスタへ割り当てます。
 
 ```text
-Virtual Register
+Virtual Registers
        ↓
 Register Allocation
-       ↓
-RAX
-RBX
-RCX
-RDX
-...
 ```
 
-Register Allocationでは、各Virtual Registerの使用状況や干渉関係などを考慮し、最終的な機械語生成へ接続します。
+必要に応じてスタック領域への退避も行います。
+
+この処理では、CFGやライブ情報などを利用して、可能な限り適切なレジスタ割り当てを行います。
 
 ---
 
-# x86-64 and ELF
+# x86-64
 
-最終的にはx86-64機械語を生成し、ELF実行ファイルとして出力します。
-
-目標とするBackend pipelineは、
+Register Allocation後、CAIはx86-64命令を生成します。
 
 ```text
-BIR
- ↓
-CFG
- ↓
-Instruction Selection
- ↓
-Virtual Registers
- ↓
 Register Allocation
- ↓
-x86-64 Machine Code
- ↓
+        ↓
+      x86-64
+```
+
+アセンブラや外部コンパイラを介さず、Similarity自身のバックエンドから機械語を生成することを目標としています。
+
+---
+
+# ELF
+
+生成したx86-64機械語をELF形式へ配置します。
+
+```text
+x86-64
+  ↓
 ELF
 ```
 
-です。
-
-Similarity自身のBackendでこの経路を構築することを目標としています。
+これにより、外部リンカに依存せず、CAIから直接実行可能なELFバイナリを生成します。
 
 ---
 
-# Language Syntax
+# 言語仕様
 
-Similarityの基本構文は、
+## 基本構文
+
+Similarityでは、基本的に以下の構造を採用します。
 
 ```text
 カテゴリ[操作{引数}]
 ```
 
-という構造を持ちます。
-
-## Variables
+## 変数
 
 ```iia
 Variable[let{int(x:10)}]
@@ -273,7 +234,7 @@ Variable[unclet{float(PI:3.14)}]
 Mutation[variable{int(x:30)}]
 ```
 
-## Operators
+## 演算子
 
 ```iia
 +{int(a,b)}
@@ -285,7 +246,7 @@ Mutation[variable{int(x:30)}]
 --{i}
 ```
 
-## Comparisons
+## 比較
 
 ```iia
 equal(a:b)
@@ -296,7 +257,7 @@ greater(a:b)
 greatereq(a:b)
 ```
 
-## Control Flow
+## 制御フロー
 
 ```iia
 If[check{less(hp:0)},
@@ -304,8 +265,6 @@ If[check{less(hp:0)},
   False{...}
 ]
 ```
-
-Loop:
 
 ```iia
 Loop[
@@ -322,9 +281,7 @@ break{}
 continue{}
 ```
 
----
-
-# Functions
+## 関数
 
 ```iia
 Function[add{
@@ -339,9 +296,7 @@ Function_public[main{
 }]
 ```
 
----
-
-# Arrays
+## 配列
 
 ```iia
 Variable[let{Array_int(arr:10)}]
@@ -351,11 +306,9 @@ Mutation[array{int(arr:0:42)}]
 Variable[let{int(val:index{arr(0)})}]
 ```
 
----
+## ポインタ
 
-# Pointers and Explicit Unsafe Operations
-
-ポインタ操作は明示的なunsafe領域として扱います。
+危険なメモリアクセスは`Mem[risk{}]`によって明示します。
 
 ```iia
 Variable[let{int(ptr:addr{x})}]
@@ -365,13 +318,9 @@ Mem[risk{
 }]
 ```
 
-`Mem[risk{}]`によってunsafeなメモリアクセスを明示します。
+## 非同期処理
 
----
-
-# Async and Shared State
-
-非同期処理間で共有される状態は明示的に宣言します。
+共有変数へのアクセスは`share()`によって明示します。
 
 ```iia
 Async[{
@@ -380,264 +329,106 @@ Async[{
 }]
 ```
 
-`share()`によって共有対象を明示し、暗黙的な共有状態を避けます。
-
 ---
 
-# Modules
+# 安全性システム
 
-```iia
-Import[math{}]
-Import[io{}]
-```
+Similarityでは、危険な操作や型に関する問題をコンパイル時に検出します。
 
----
-
-# Type Safety
-
-TypeCheckerでは型に関する問題をコンパイル時に検出します。
-
-エラー形式:
+エラーは、
 
 ```text
 行:列: TypeCheck Error [コード]: メッセージ
 ```
 
-主なエラーコード:
+の形式で報告されます。
 
-| Code          | Description                      |
-| ------------- | -------------------------------- |
-| TC1001        | null許容型のnullチェックなしアクセス           |
-| TC2001〜TC2010 | 型ミスマッチ・未宣言変数・配列型違反等              |
-| TC3002        | `risk{}` 外での `deref` 使用          |
-| TC4001        | 整数オーバーフロー                        |
-| TC5001        | `share` 対象の未宣言変数                 |
-| TC5002        | `Async` 内で `share` 宣言なしにMutation |
-
----
-
-# Standard Library
-
-| Library | Main functions              |
-| ------- | --------------------------- |
-| `math`  | `absolute_value`, `maximum` |
-| `io`    | `io_print`                  |
-
-詳細:
-
-```text
-docs/StandardLibrary.md
-```
+| コード           | 内容                          |
+| ------------- | --------------------------- |
+| TC1001        | null許容型のnullチェックなしアクセス      |
+| TC2001〜TC2010 | 型ミスマッチ・未宣言変数・配列型違反など        |
+| TC3002        | `risk{}`外での`deref`使用        |
+| TC4001        | 整数オーバーフロー                   |
+| TC5001        | `share`対象の未宣言変数             |
+| TC5002        | Async内で`share`宣言なしにMutation |
 
 ---
 
-# Development Status
+# 標準ライブラリ
 
-Similarityは現在Prototype段階です。
+| ライブラリ  | 主な機能                        |
+| ------ | --------------------------- |
+| `math` | `absolute_value`, `maximum` |
+| `io`   | `io_print`                  |
 
-| Component             | Status            |
-| --------------------- | ----------------- |
-| Lexer                 | ✅ Implemented     |
-| Parser                | ✅ Implemented     |
-| AST                   | ✅ Implemented     |
-| TypeChecker           | ✅ Implemented     |
-| Analyzer              | ✅ Implemented     |
-| BackendFunction       | ✅ Implemented     |
-| BIR                   | ✅ Implemented     |
-| BIR Serializer        | ✅ Implemented     |
-| C Backend             | ✅ Implemented     |
-| CFG Construction      | ✅ Implemented     |
-| Nested CFG            | ✅ Implemented     |
-| Function Calls in CFG | ✅ Implemented     |
-| Instruction Selection | 🚧 In Development |
-| Virtual Registers     | 🚧 In Development |
-| Register Allocation   | 📋 Planned        |
-| x86-64 Backend        | 📋 Planned        |
-| ELF Generation        | 📋 Planned        |
-| APE / Multi-OS        | 📋 Long-term      |
-| GPU Backend           | 📋 Long-term      |
-| Self-hosting          | 📋 Long-term      |
+詳細は`docs/StandardLibrary.md`を参照してください。
 
 ---
 
-# CFG Validation
+# 実装状況
 
-CFGは複数のベンチマークおよびストレスケースによって検証しています。
+| 機能                      | 状態      |
+| ----------------------- | ------- |
+| Lexer / Parser          | ✅ 実装済み  |
+| TypeChecker             | ✅ 実装済み  |
+| Analyzer                | ✅ 実装済み  |
+| BackendFunction         | ✅ 実装済み  |
+| CAI CFG                 | ✅ 実装済み  |
+| Instruction Selection   | 🚧 開発中  |
+| Virtual Registers       | 🚧 開発中  |
+| Register Allocation     | 📅 予定   |
+| x86-64コード生成             | 📅 予定   |
+| ELF生成                   | 📅 予定   |
+| 配列                      | ✅ 実装済み  |
+| ポインタ / `deref` / `addr` | ✅ 実装済み  |
+| 構造体                     | ✅ 実装済み  |
+| Async / `share`         | ✅ 実装済み  |
+| Echo                    | ✅ 実装済み  |
+| Cell                    | ✅ 実装済み  |
+| 標準ライブラリ                 | ✅ 実装済み  |
+| APE形式                   | 📅 長期目標 |
+| 自己ホスト                   | 📅 長期目標 |
+| GPU本実装                  | 📅 長期目標 |
 
-```text
-benchmark/fibonacci
-benchmark/sum
-benchmark/matrix
-benchmark/stress/bench_call
-benchmark/ackermann
-benchmark/bubble_sort
-benchmark/control/bench_nested_loop
-benchmark/eratosthenes
-benchmark/bench_frontend_long
-```
-
-検証対象には、
-
-* 単純な関数
-* 関数呼び出し
-* 再帰
-* if/else
-* loop
-* nested loop
-* loop back edge
-* 複数関数
-* 大量関数
-* 複雑な制御フロー
-
-が含まれます。
-
-`bench_frontend_long.bir`では51関数を読み込み、各関数のCFGを正常に構築できることを確認しています。
+※ 実装状況は開発の進行に合わせて更新されます。
 
 ---
 
-# Building
+# 設計原則
 
-Similarity本体:
+### 1. コンパイラは推測しない
 
-```bash
-go build -o sim ./cmd/
-```
+プログラムの重要な動作を暗黙的な推測に依存させず、可能な限り明示的に記述します。
 
-C Backend:
+### 2. unsafe操作を明示する
 
-```bash
-make -C cbackend
-```
+危険なメモリアクセスは`Mem[risk{}]`として明示します。
 
-Tests:
+### 3. 共有状態を明示する
 
-```bash
-go test ./analyzer -v
-go test ./backend -v
-```
+Async間で共有される変数は`share()`によって明示します。
 
----
+### 4. GCに依存しない
 
-# Running
+メモリ管理をガベージコレクタに隠蔽せず、システムプログラミングに適した明示的なモデルを目指します。
 
-通常の実行:
+### 5. C/C++に依存しない
 
-```bash
-./sim benchmark/fibonacci/bench_fib.iia
-```
+SimilarityのバックエンドであるCAIは、C/C++やGCC、LLVMを実行基盤として必要としない独立したコード生成系を目指します。
 
-Backendの確認:
+### 6. 中間表現を増やさない
 
-```bash
-./sim benchmark/fibonacci/bench_fib.iia --dump-backend
-```
-
-CFGの確認:
-
-```bash
-./sim benchmark/fibonacci/bench_fib.iia --dump-cfg
-```
-
-`--dump-cfg`では、各関数についてBlock、Condition、Successor、Predecessor、Loop depthなどを確認できます。
+FrontendとBackendの間に不要な中間表現を追加せず、`BackendFunction → CAI`という直接的な構造を維持します。
 
 ---
 
-# Project Structure
+# 開発状況
 
-```text
-Similarity/
-├── cmd/
-│   └── main.go
-│
-├── lexer/
-├── parser/
-├── ast/
-├── typecheck/
-├── analyzer/
-│
-├── backend/
-│   └── runner.go
-│
-├── cbackend/
-│   ├── ...
-│   ├── Makefile
-│   └── sim_backend
-│
-├── stdlib/
-├── examples/
-├── benchmark/
-└── docs/
-```
+Similarityは現在プロトタイプ段階です。
 
-Backendは以下のように段階的に分離されています。
+現在はフロントエンドからBackendFunction、そしてCAIのCFG構築までの基盤が整備されています。
 
-```text
-Analyzer
-    ↓
-BackendFunction
-    ↓
-BIR
-    ↓
-C Backend
-    ↓
-CFG
-    ↓
-Instruction Selection
-```
-
----
-
-# Design Principles
-
-## 1. No Garbage Collector
-
-ガベージコレクションを前提としない。
-
-## 2. No Compiler Guessing
-
-コンパイラがプログラマの意図を過剰に推測することを避ける。
-
-## 3. Explicit Unsafe
-
-unsafeな操作は明示的に記述する。
-
-```text
-Mem[risk{...}]
-```
-
-## 4. Explicit Sharing
-
-非同期処理間の共有状態を明示する。
-
-```text
-share(x)
-```
-
-## 5. No Dependency on C/C++
-
-特定のC/C++コンパイラをSimilarityのコンパイル経路に必要としないことを目指す。
-
-## 6. Clear Compiler Boundaries
-
-各コンパイル段階の責務を明確に分離する。
-
-```text
-Frontend
-Semantic Analysis
-IR
-Control Flow
-Instruction Selection
-Register Allocation
-Machine Code
-```
-
----
-
-# Current Development Stage
-
-Similarityは現在、FrontendからBackendまでの基本的なコンパイルパイプラインを構築し、**CFG Constructionを完了した段階**にあります。
-
-現在の中心的な開発対象は、
+次の主要な段階は、
 
 ```text
 CFG
@@ -655,24 +446,4 @@ ELF
 
 です。
 
-最終的な目標は、Similarityのソースコードからx86-64 ELFバイナリまでを、明確に定義された自前のコンパイルパイプラインによって生成することです。
-
----
-
-# License
-
-SimilarityのソースコードはMIT Licenseの下で公開されています。
-
-ただし、**Elestrovicの名称、ロゴ、および関連するブランド要素はMIT Licenseの許諾対象ではありません。**
-
-詳細については `LICENSE` を参照してください。
-
----
-
-# Elestrovic
-
-Similarity is developed as part of **Elestrovic**.
-
-**Technology for the next generation.**
-
-**利便性に「確かな安全を。」**
+Similarityは、最終的に外部コンパイラやリンカに依存せず、自身のバックエンドによって実行可能なバイナリを生成できるシステムプログラミング言語を目指します。
