@@ -24,10 +24,10 @@ func buildBF(t *testing.T, src string) []backend.BackendFunc {
 		t.Fatalf("typecheck error: %v", errs)
 	}
 	analyzer.New().Annotate(prog)
-	return cbackend.BuildBackendProgram(prog)
+	return backend.BuildBackendProgram(prog)
 }
 
-func findBF(funcs []cbackend.BackendFunc, name string) *cbackend.BackendFunc {
+func findBF(funcs []backend.BackendFunc, name string) *backend.BackendFunc {
 	for i := range funcs {
 		if funcs[i].Name == name {
 			return &funcs[i]
@@ -92,9 +92,9 @@ Function_public[main{
 		t.Fatal("function 'main' not found")
 	}
 	// Body: Variable(i), Variable(sum), Loop, Return
-	var loopStmt *cbackend.BFStmt
+	var loopStmt *backend.BFStmt
 	for i := range fn.Stmts {
-		if fn.Stmts[i].Kind == cbackend.BFStmtLoop {
+		if fn.Stmts[i].Kind == backend.BFStmtLoop {
 			loopStmt = &fn.Stmts[i]
 			break
 		}
@@ -143,9 +143,9 @@ Function_public[main{
 	if fn == nil {
 		t.Fatal("function 'main' not found")
 	}
-	var outer *cbackend.BFStmt
+	var outer *backend.BFStmt
 	for i := range fn.Stmts {
-		if fn.Stmts[i].Kind == cbackend.BFStmtLoop {
+		if fn.Stmts[i].Kind == backend.BFStmtLoop {
 			outer = &fn.Stmts[i]
 			break
 		}
@@ -156,9 +156,9 @@ Function_public[main{
 	if outer.LoopDepth != 0 {
 		t.Errorf("outer.LoopDepth=%d, want 0", outer.LoopDepth)
 	}
-	var inner *cbackend.BFStmt
+	var inner *backend.BFStmt
 	for i := range outer.LoopBody {
-		if outer.LoopBody[i].Kind == cbackend.BFStmtLoop {
+		if outer.LoopBody[i].Kind == backend.BFStmtLoop {
 			inner = &outer.LoopBody[i]
 			break
 		}
@@ -209,9 +209,9 @@ Function_public[main{
 		t.Errorf("RetSize=%d RetPtr=%v, want 4/false", fib.RetSize, fib.RetPtr)
 	}
 	// IfNode
-	var ifStmt *cbackend.BFStmt
+	var ifStmt *backend.BFStmt
 	for i := range fib.Stmts {
-		if fib.Stmts[i].Kind == cbackend.BFStmtIf {
+		if fib.Stmts[i].Kind == backend.BFStmtIf {
 			ifStmt = &fib.Stmts[i]
 			break
 		}
@@ -252,18 +252,16 @@ Function_public[main{
 	}
 	analyzer.New().Annotate(prog)
 
-	// BackendFuncとBIRは同じAnnotationを参照する
-	funcs := cbackend.BuildBackendProgram(prog)
-	bir := cbackend.Serialize(prog)
+	// BackendFuncがAnnotationを正しく参照しているか確認
+	funcs := backend.BuildBackendProgram(prog)
 
 	fn := findBF(funcs, "main")
 	if fn == nil {
 		t.Fatal("function 'main' not found")
 	}
 
-	// BackendFunc.Locals[0].Size と BIR の "LOCAL i 4 0" が一致
+	// BackendFunc.Locals[0].Size が正しい
 	if fn.Locals[0].Size != 4 {
 		t.Errorf("Locals[0].Size=%d, want 4", fn.Locals[0].Size)
 	}
-	_ = bir // BIR内容はserial_test.goで検証済み
 }

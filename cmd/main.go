@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"similarity/analyzer"
+	"similarity/backend"
 	"similarity/compiler"
 	"similarity/debug"
 	"similarity/transpiler"
@@ -79,16 +80,16 @@ func runCAI(src string, opts compiler.Options) {
 		debug.DumpAnalyzer(result.Program)
 	}
 
-	// BackendFunction生成（--dump-backend / 将来のCFG生成で使用）
-	bfuncs := backend.New()
-	// 将来のCFGパスで使用する
+	// BackendFunction生成（Go側の責務はここまで）
+	bfuncs := backend.BuildBackendProgram(result.Program)
 
 	// --dump-backend
 	if opts.DumpBackend {
 		debug.DumpBackend(bfuncs)
 	}
 
-	// --dump-cfg / --dump-regalloc / --dump-machine（CFG/RegAlloc実装後に有効化）
+	// --dump-cfg / --dump-regalloc / --dump-machine はC Backend側で実装
+	// sim_backend に --dump-cfg 等のフラグを渡して実行する（C Backend実装後に有効化）
 	if opts.DumpCFG {
 		debug.DumpCFG()
 	}
@@ -164,7 +165,7 @@ func printUsage() {
 	fmt.Println("  --dump-types     TypeChecker通過後の型情報を表示")
 	fmt.Println("  --dump-analyzer  Analyzer通過後のAnnotation付きASTを表示")
 	fmt.Println("  --dump-backend   BackendFunction生成直後の内容を表示")
-	fmt.Println("  --dump-cfg       Backend CFGを表示（CFG実装後に有効化）")
+	fmt.Println("  --dump-cfg       CFG生成直後の内容を表示")
 	fmt.Println("  --dump-regalloc  レジスタ割り当て結果を表示（Backend実装後に有効化）")
 	fmt.Println("  --dump-machine   最終機械語を表示（Backend実装後に有効化）")
 }

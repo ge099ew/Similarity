@@ -1,11 +1,11 @@
-package cbackend_test
+package backend_test
 
 import (
 	"strings"
 	"testing"
 
 	"similarity/analyzer"
-	"similarity/cbackend"
+	"similarity/backend"
 	"similarity/lexer"
 	"similarity/parser"
 	"similarity/typecheck"
@@ -25,7 +25,7 @@ func birOf(t *testing.T, src string) string {
 		t.Fatalf("typecheck error: %v", errs)
 	}
 	analyzer.New().Annotate(prog)
-	return cbackend.Serialize(prog)
+	return backend.Serialize(prog)
 }
 
 func mustContain(t *testing.T, bir string, checks []string) {

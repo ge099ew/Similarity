@@ -1,5 +1,5 @@
-// Package cbackend: Cバックエンドの起動・管理。
-package cbackend
+// Package backend: Cバックエンドの起動・管理。
+package backend
 
 import (
 	"fmt"

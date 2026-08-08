@@ -1,4 +1,4 @@
-// Package cbackend: Annotated ASTをCバックエンドへ渡すためのシリアライザ。
+// Package backend: Annotated ASTをCバックエンドへ渡すためのシリアライザ。
 //
 // GoはAnnotated ASTを独自テキスト形式（.bir: Backend IR）にシリアライズし、
 // Cバックエンド（backend）がそのファイルを読んでBackendFunctionを構築する。
@@ -41,7 +41,7 @@
 //	ENDIF
 //	RET <size> <is_ptr:0|1> <expr>
 //	RET_VOID
-package cbackend
+package backend
 
 import (
 	"fmt"

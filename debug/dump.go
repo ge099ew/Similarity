@@ -535,14 +535,13 @@ func collectMutations(body []ast.Node) []*ast.MutationNode {
 // Backend実装後に有効化する。現時点では「未実装」を表示するのみ。
 // =============================================================
 
-// DumpCFG はCFGを標準出力に表示する。
-// BackendFunc変更なし・ASTへの影響なし。
-func DumpCFG(cfgs []*backend.CFG) {
+// DumpCFG はC BackendのCFGをダンプする。
+// CFG構築はC Backend（sim_backend）の責務のため、
+// 現時点ではC Backend実装待ちのプレースホルダ。
+func DumpCFG() {
 	fmt.Println("===== DUMP: cfg =====")
+	fmt.Println("  (C Backend実装後に有効化 - sim_backend --dump-cfg 経由)")
 	fmt.Println()
-	for _, cfg := range cfgs {
-		fmt.Print(cfg.Dump())
-	}
 }
 
 // DumpRegAlloc はレジスタ割り当て結果を表示する。
